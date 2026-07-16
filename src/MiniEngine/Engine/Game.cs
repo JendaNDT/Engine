@@ -27,6 +27,7 @@ public sealed class Game : IDisposable
     private readonly Store<AudioSourceComponent> _audioSources;
     private readonly ParticleSystem _particleSystem = new();
     private readonly AudioSystem _audioSystem = new();
+    private SkyboxRenderer _skybox = null!;
 
     // Fyzika bezi jen kdyz je zapnuta tlacitkem. STOP = dispose celeho sveta,
     // START = novy svet postaveny z aktualnich Transformu. Zadne rucni mazani teles.
@@ -93,6 +94,8 @@ public sealed class Game : IDisposable
         io.ConfigWindowsMoveFromTitleBarOnly = true;
 
         _lighting = new LightingShader();
+        _skybox = new SkyboxRenderer();
+        _skybox.LoadSkybox("textures/skybox.jpg");
         _assets.DefaultShader = _lighting.Shader;   // kazdy nacteny model dostane osvetleni
         _cubeMesh = Raylib.GenMeshCube(1f, 1f, 1f);
         _cubeMaterial = Raylib.LoadMaterialDefault();
@@ -226,6 +229,7 @@ public sealed class Game : IDisposable
         _assets.Dispose();    // GPU zdroje uvolnit PRED zavrenim okna (vraci materialum default shader)
         Raylib.UnloadMesh(_cubeMesh);
         _lighting.Dispose();
+        _skybox.Dispose();
         _viewport.Dispose();
         rlImGui.Shutdown();
         Raylib.CloseAudioDevice();
@@ -636,6 +640,8 @@ public sealed class Game : IDisposable
 
     private void DrawScene(Camera3D camera)
     {
+        _skybox.Draw(camera);
+
         _lighting.Apply(camera);   // viewPos + parametry slunce do shaderu
 
         Raylib.DrawGrid(40, 1f);
