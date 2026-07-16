@@ -48,6 +48,9 @@ public sealed class Game : IDisposable
     private BepuPhysics.BodyHandle? _playerBody;
     private int _playerEntity = -1;
 
+    private float _assetScanTimer;
+    private readonly System.Collections.Generic.List<string> _assetFiles = new();
+
     // Osvetleni + sdileny mesh/material pro krychle.
     // Kresleni pres DrawMesh s world matici = krychle konecne respektuji ROTACI
     // (DrawCubeV ji ignoroval) a dostanou stinovani.
@@ -124,6 +127,7 @@ public sealed class Game : IDisposable
             }
         };
 
+        RefreshAssetFiles();
         CreateDemoScene();
         TryLoadTestModel();   // az PO InitWindow - LoadModel nahrava na GPU
 
@@ -185,9 +189,12 @@ public sealed class Game : IDisposable
             float leftW = MathF.Min(300f, ws.X * 0.20f);
             float rightW = MathF.Min(360f, ws.X * 0.24f);
 
-            NextWindowRect(new Vector2(wp.X + leftW, wp.Y), new Vector2(ws.X - leftW - rightW, ws.Y));
+            NextWindowRect(new Vector2(wp.X + leftW, wp.Y), new Vector2(ws.X - leftW - rightW, ws.Y * 0.70f));
             _viewport.DrawPanel();
             HandleGizmo();     // PRED pickingem - klik na sipku nesmi zmenit vyber
+
+            NextWindowRect(new Vector2(wp.X + leftW, wp.Y + ws.Y * 0.70f), new Vector2(ws.X - leftW - rightW, ws.Y * 0.30f));
+            DrawAssetBrowserPanel();
             HandlePicking();   // hned po DrawPanel - Hovered a Origin jsou cerstvé
 
             NextWindowRect(new Vector2(wp.X, wp.Y), new Vector2(leftW, ws.Y * 0.58f));
@@ -218,6 +225,13 @@ public sealed class Game : IDisposable
 
     private void Update(float dt)
     {
+        _assetScanTimer += dt;
+        if (_assetScanTimer > 2f)
+        {
+            _assetScanTimer = 0f;
+            RefreshAssetFiles();
+        }
+
         bool altDown = Raylib.IsKeyDown(KeyboardKey.LeftAlt) || Raylib.IsKeyDown(KeyboardKey.RightAlt);
 
         // Alt+tazeni se po startu "latchne": rozhlizis se, dokud nepustis tlacitko,
@@ -893,6 +907,85 @@ public sealed class Game : IDisposable
         _world.Add(e, t);
         _world.Add(e, new MeshRenderer { ModelHandle = handle, Tint = Vector3.One, Visible = true });
         _world.Add(e, new Name { Value = "Donut (test.glb)" });
+    }
+
+    private void RefreshAssetFiles()
+    {
+        _assetFiles.Clear();
+        string assetsDir = Path.Combine(AppContext.BaseDirectory, "assets");
+        if (Directory.Exists(assetsDir))
+        {
+            foreach (var file in Directory.GetFiles(assetsDir, "*.*", SearchOption.AllDirectories))
+            {
+                string rel = Path.GetRelativePath(assetsDir, file);
+                string ext = Path.GetExtension(file).ToLower();
+                if (ext == ".glb" || ext == ".gltf" || ext == ".vs" || ext == ".fs" || ext == ".png")
+                {
+                    _assetFiles.Add(rel);
+                }
+            }
+        }
+    }
+
+    private void SpawnModelAsset(string relPath)
+    {
+        try
+        {
+            string fullPath = Path.Combine(AppContext.BaseDirectory, "assets", relPath);
+            int handle = _assets.LoadModel(fullPath);
+
+            var e = _world.Create();
+            var t = Transform.Identity;
+            
+            Vector3 camForward = Vector3.Normalize(_camera.Camera.Target - _camera.Camera.Position);
+            t.Position = _camera.Camera.Position + camForward * 4f;
+            
+            _world.Add(e, t);
+            _world.Add(e, new MeshRenderer { ModelHandle = handle, Tint = Vector3.One, Visible = true });
+            _world.Add(e, new Name { Value = Path.GetFileNameWithoutExtension(relPath) });
+            
+            _selection.EntityIndex = e.Index;
+            _hierarchy.SceneStatus = $"Načten a spawnut model: {Path.GetFileName(relPath)}";
+        }
+        catch (Exception ex)
+        {
+            _hierarchy.SceneStatus = $"Chyba spawnu: {ex.Message}";
+        }
+    }
+
+    private void DrawAssetBrowserPanel()
+    {
+        ImGui.Begin("Asset Browser");
+
+        if (ImGui.Button("Obnovit")) RefreshAssetFiles();
+        ImGui.SameLine();
+        ImGui.TextDisabled("Kliknutím na model (.glb) jej spawneš do scény.");
+
+        ImGui.Separator();
+
+        if (ImGui.BeginChild("FilesList"))
+        {
+            foreach (var relPath in _assetFiles)
+            {
+                string ext = Path.GetExtension(relPath).ToLower();
+                
+                string icon = "📄";
+                if (ext == ".glb" || ext == ".gltf") icon = "📦";
+                else if (ext == ".vs" || ext == ".fs") icon = "⚙️";
+                else if (ext == ".png") icon = "🖼️";
+
+                if (ImGui.Button($"{icon} {relPath}"))
+                {
+                    if (ext == ".glb" || ext == ".gltf")
+                    {
+                        SpawnModelAsset(relPath);
+                    }
+                }
+            }
+            ImGui.EndChild();
+        }
+
+        ImGui.End();
     }
 
     public void Dispose() { }
