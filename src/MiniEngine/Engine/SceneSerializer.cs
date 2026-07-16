@@ -48,6 +48,8 @@ public sealed class EntityData
     public float[] Rotation { get; set; } = [0, 0, 0, 1];   // kvaternion XYZW
     public float[] Scale { get; set; } = [1, 1, 1];
     public int Parent { get; set; } = -1;                   // pozice rodice v Entities, -1 = root
+    public string? PrefabPath { get; set; }                  // null = neni prefab
+    public string? PrefabOverrides { get; set; }             // JSON string s prepsanymi vlastnostmi
     public MeshRendererData? MeshRenderer { get; set; }
     public ParticleEmitterData? ParticleEmitter { get; set; }
     public AudioSourceData? AudioSource { get; set; }
@@ -147,7 +149,8 @@ public static class SceneSerializer
 {
     public static SceneData CreateSceneData(Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
-        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor)
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor,
+        Store<PrefabLink> prefabLinks)
     {
         var scene = new SceneData();
         var entityIndexes = transforms.Entities;
@@ -171,6 +174,13 @@ public static class SceneSerializer
                 Scale = [t.Scale.X, t.Scale.Y, t.Scale.Z],
                 Parent = t.Parent >= 0 && listPos.TryGetValue(t.Parent, out int p) ? p : -1
             };
+
+            if (prefabLinks != null && prefabLinks.Has(idx))
+            {
+                var pl = prefabLinks.Get(idx);
+                e.PrefabPath = pl.PrefabPath;
+                e.PrefabOverrides = pl.Overrides;
+            }
 
             if (renderers.Has(idx))
             {
@@ -299,7 +309,8 @@ public static class SceneSerializer
 
     public static void ApplySceneData(SceneData scene, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
-        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor)
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor,
+        Store<PrefabLink> prefabLinks)
     {
         if (scene.Lighting is { } l)
         {
@@ -335,6 +346,10 @@ public static class SceneSerializer
             {
                 ref var r = ref renderers.Get(idx);
                 if (r.ModelHandle >= 0) assets.Release(r.ModelHandle);
+            }
+            if (prefabLinks != null && prefabLinks.Has(idx))
+            {
+                prefabLinks.RemoveAt(idx);
             }
             world.Destroy(world.EntityFromIndex(idx));
         }
@@ -463,6 +478,15 @@ public static class SceneSerializer
                     Intensity = ld.Intensity
                 });
             }
+
+            if (prefabLinks != null && !string.IsNullOrEmpty(e.PrefabPath))
+            {
+                prefabLinks.Add(idx, new PrefabLink
+                {
+                    PrefabPath = e.PrefabPath,
+                    Overrides = e.PrefabOverrides ?? ""
+                });
+            }
         }
 
         // Remap TargetEntity pro spoustec / akce
@@ -476,11 +500,17 @@ public static class SceneSerializer
                 triggerComp.TargetEntity = created[tr.TargetEntity];
             }
         }
+
+        if (prefabLinks != null)
+        {
+            PropagatePrefabs(world, transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, prefabLinks);
+        }
     }
 
     public static SceneData CreatePrefabData(int rootIdx, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
-        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets)
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets,
+        Store<PrefabLink> prefabLinks)
     {
         var scene = new SceneData();
         if (!transforms.Has(rootIdx)) return scene;
@@ -512,6 +542,13 @@ public static class SceneSerializer
                 Scale = [t.Scale.X, t.Scale.Y, t.Scale.Z],
                 Parent = t.Parent >= 0 && listPos.TryGetValue(t.Parent, out int p) ? p : -1
             };
+
+            if (prefabLinks != null && prefabLinks.Has(idx))
+            {
+                var pl = prefabLinks.Get(idx);
+                e.PrefabPath = pl.PrefabPath;
+                e.PrefabOverrides = pl.Overrides;
+            }
 
             if (idx == rootIdx)
             {
@@ -626,7 +663,8 @@ public static class SceneSerializer
 
     public static int ApplyPrefabData(SceneData prefab, Vector3 spawnPosition, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
-        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets)
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets,
+        string prefabPath, Store<PrefabLink> prefabLinks)
     {
         if (prefab.Entities.Count == 0) return -1;
 
@@ -755,6 +793,15 @@ public static class SceneSerializer
                     Intensity = l.Intensity
                 });
             }
+
+            if (prefabLinks != null && !string.IsNullOrEmpty(e.PrefabPath))
+            {
+                prefabLinks.Add(idx, new PrefabLink { PrefabPath = e.PrefabPath, Overrides = e.PrefabOverrides ?? "" });
+            }
+            else if (i == 0 && prefabLinks != null && !string.IsNullOrEmpty(prefabPath))
+            {
+                prefabLinks.Add(idx, new PrefabLink { PrefabPath = prefabPath, Overrides = "" });
+            }
         }
 
         // Remap TargetEntity pro spoustec / akce v prefabu
@@ -774,18 +821,237 @@ public static class SceneSerializer
 
     public static void Save(string path, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
-        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor)
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor,
+        Store<PrefabLink> prefabLinks)
     {
-        var scene = CreateSceneData(transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, lighting, postProcessor);
+        var scene = CreateSceneData(transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, lighting, postProcessor, prefabLinks);
         File.WriteAllText(path, JsonSerializer.Serialize(scene, SceneJsonContext.Default.SceneData));
     }
 
     public static void Load(string path, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
-        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor)
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor,
+        Store<PrefabLink> prefabLinks)
     {
         var scene = JsonSerializer.Deserialize(File.ReadAllText(path), SceneJsonContext.Default.SceneData);
         if (scene is null) return;
-        ApplySceneData(scene, world, transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, lighting, postProcessor);
+        ApplySceneData(scene, world, transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, lighting, postProcessor, prefabLinks);
+    }
+
+    public static void PropagatePrefabs(World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets,
+        Store<PrefabLink> prefabLinks)
+    {
+        var roots = prefabLinks.Entities;
+        var rootsCopy = new int[roots.Length];
+        roots.CopyTo(rootsCopy);
+
+        foreach (int rootIdx in rootsCopy)
+        {
+            var pl = prefabLinks.Get(rootIdx);
+            if (string.IsNullOrEmpty(pl.PrefabPath)) continue;
+
+            string fullPath = Path.Combine(AppContext.BaseDirectory, "assets", pl.PrefabPath);
+            if (!File.Exists(fullPath)) continue;
+
+            try
+            {
+                var prefabJson = File.ReadAllText(fullPath);
+                var prefab = JsonSerializer.Deserialize(prefabJson, SceneJsonContext.Default.SceneData);
+                if (prefab == null || prefab.Entities.Count == 0) continue;
+
+                var sceneSubtree = new List<int>();
+                GetDfsSubtree(transforms, rootIdx, sceneSubtree);
+
+                var prefabSubtree = new List<int>();
+                GetDfsSubtreeData(prefab.Entities, 0, prefabSubtree);
+
+                int count = Math.Min(sceneSubtree.Count, prefabSubtree.Count);
+
+                var overrides = new Dictionary<string, List<string>>();
+                if (!string.IsNullOrEmpty(pl.Overrides))
+                {
+                    try
+                    {
+                        overrides = JsonSerializer.Deserialize<Dictionary<string, List<string>>>(pl.Overrides);
+                    }
+                    catch { }
+                }
+                if (overrides == null) overrides = new Dictionary<string, List<string>>();
+
+                for (int i = 0; i < count; i++)
+                {
+                    int sEnt = sceneSubtree[i];
+                    int pEntPos = prefabSubtree[i];
+                    var pEnt = prefab.Entities[pEntPos];
+                    string key = i.ToString();
+
+                    var entOverrides = overrides.TryGetValue(key, out var list) ? list : new List<string>();
+
+                    if (transforms.Has(sEnt))
+                    {
+                        ref var t = ref transforms.Get(sEnt);
+                        if (i > 0)
+                        {
+                            if (!entOverrides.Contains("Transform.Position") && pEnt.Position is { Length: >= 3 })
+                                t.Position = new Vector3(pEnt.Position[0], pEnt.Position[1], pEnt.Position[2]);
+                            if (!entOverrides.Contains("Transform.Rotation") && pEnt.Rotation is { Length: >= 4 })
+                                t.Rotation = new Quaternion(pEnt.Rotation[0], pEnt.Rotation[1], pEnt.Rotation[2], pEnt.Rotation[3]);
+                            if (!entOverrides.Contains("Transform.Scale") && pEnt.Scale is { Length: >= 3 })
+                                t.Scale = new Vector3(pEnt.Scale[0], pEnt.Scale[1], pEnt.Scale[2]);
+                        }
+                    }
+
+                    if (names.Has(sEnt))
+                    {
+                        if (!entOverrides.Contains("Name"))
+                        {
+                            ref var n = ref names.Get(sEnt);
+                            n.Value = pEnt.Name;
+                        }
+                    }
+
+                    if (pEnt.MeshRenderer != null)
+                    {
+                        if (!renderers.Has(sEnt))
+                        {
+                            renderers.Add(sEnt, new MeshRenderer { ModelHandle = -1, Tint = Vector3.One, Visible = true });
+                        }
+                        ref var r = ref renderers.Get(sEnt);
+
+                        if (!entOverrides.Contains("MeshRenderer.Tint") && pEnt.MeshRenderer.Tint is { Length: >= 3 })
+                            r.Tint = new Vector3(pEnt.MeshRenderer.Tint[0], pEnt.MeshRenderer.Tint[1], pEnt.MeshRenderer.Tint[2]);
+
+                        if (!entOverrides.Contains("MeshRenderer.Visible"))
+                            r.Visible = pEnt.MeshRenderer.Visible;
+
+                        if (!entOverrides.Contains("MeshRenderer.AlbedoTexturePath"))
+                            r.AlbedoTexturePath = pEnt.MeshRenderer.AlbedoTexturePath ?? "";
+
+                        if (!entOverrides.Contains("MeshRenderer.NormalMapPath"))
+                            r.NormalMapPath = pEnt.MeshRenderer.NormalMapPath ?? "";
+
+                        if (!entOverrides.Contains("MeshRenderer.MetallicRoughnessMapPath"))
+                            r.MetallicRoughnessMapPath = pEnt.MeshRenderer.MetallicRoughnessMapPath ?? "";
+
+                        if (!entOverrides.Contains("MeshRenderer.MetallicFactor"))
+                            r.MetallicFactor = pEnt.MeshRenderer.MetallicFactor;
+
+                        if (!entOverrides.Contains("MeshRenderer.RoughnessFactor"))
+                            r.RoughnessFactor = pEnt.MeshRenderer.RoughnessFactor;
+
+                        if (!entOverrides.Contains("MeshRenderer.ModelPath"))
+                        {
+                            int handle = pEnt.MeshRenderer.ModelPath == null
+                                ? -1
+                                : assets.LoadModel(Path.Combine(AssetManager.AssetsRoot, pEnt.MeshRenderer.ModelPath));
+                            if (r.ModelHandle >= 0 && r.ModelHandle != handle)
+                            {
+                                assets.Release(r.ModelHandle);
+                            }
+                            r.ModelHandle = handle;
+                        }
+                    }
+                    else if (renderers.Has(sEnt))
+                    {
+                        if (!entOverrides.Contains("MeshRenderer.Removed"))
+                        {
+                            ref var r = ref renderers.Get(sEnt);
+                            if (r.ModelHandle >= 0) assets.Release(r.ModelHandle);
+                            renderers.RemoveAt(sEnt);
+                        }
+                    }
+
+                    if (pEnt.Light != null)
+                    {
+                        if (!lights.Has(sEnt))
+                        {
+                            lights.Add(sEnt, LightComponent.Default);
+                        }
+                        ref var l = ref lights.Get(sEnt);
+
+                        if (!entOverrides.Contains("Light.Active"))
+                            l.Active = pEnt.Light.Active;
+
+                        if (!entOverrides.Contains("Light.Color") && pEnt.Light.Color is { Length: >= 3 })
+                            l.Color = new Vector3(pEnt.Light.Color[0], pEnt.Light.Color[1], pEnt.Light.Color[2]);
+
+                        if (!entOverrides.Contains("Light.Radius"))
+                            l.Radius = pEnt.Light.Radius;
+
+                        if (!entOverrides.Contains("Light.Intensity"))
+                            l.Intensity = pEnt.Light.Intensity;
+                    }
+                    else if (lights.Has(sEnt))
+                    {
+                        if (!entOverrides.Contains("Light.Removed"))
+                        {
+                            lights.RemoveAt(sEnt);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Chyba propagace prefabu: {ex.Message}");
+            }
+        }
+    }
+
+    public static void GetDfsSubtree(Store<Transform> transforms, int current, List<int> result)
+    {
+        result.Add(current);
+        var children = new List<int>();
+        var entities = transforms.Entities;
+        for (int i = 0; i < entities.Length; i++)
+        {
+            int e = entities[i];
+            if (e != current && transforms.Get(e).Parent == current)
+            {
+                children.Add(e);
+            }
+        }
+        children.Sort();
+        foreach (var child in children)
+        {
+            GetDfsSubtree(transforms, child, result);
+        }
+    }
+
+    public static void GetDfsSubtreeData(List<EntityData> entities, int currentPos, List<int> result)
+    {
+        result.Add(currentPos);
+        var children = new List<int>();
+        for (int i = 0; i < entities.Count; i++)
+        {
+            if (entities[i].Parent == currentPos)
+            {
+                children.Add(i);
+            }
+        }
+        children.Sort();
+        foreach (var child in children)
+        {
+            GetDfsSubtreeData(entities, child, result);
+        }
+    }
+
+    public static bool IsPartOfPrefab(Store<Transform> transforms, Store<PrefabLink> prefabLinks, int entity, out int prefabRoot)
+    {
+        prefabRoot = -1;
+        if (prefabLinks == null) return false;
+        int current = entity;
+        while (current >= 0)
+        {
+            if (prefabLinks.Has(current))
+            {
+                prefabRoot = current;
+                return true;
+            }
+            if (!transforms.Has(current)) break;
+            current = transforms.Get(current).Parent;
+        }
+        return false;
     }
 }

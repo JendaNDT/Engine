@@ -4,7 +4,6 @@ in vec3 fragPosition;
 in vec2 fragTexCoord;
 in vec3 fragNormal;
 in vec4 fragColor;
-in vec4 fragPositionLight;
 
 uniform sampler2D texture0;   // albedo
 uniform sampler2D texture2;   // normal map (Raylib MaterialMapIndex.Normal)
@@ -17,6 +16,11 @@ uniform vec3 sunDir;
 uniform vec3 sunColor;
 uniform vec3 ambientColor;
 uniform float specStrength;
+
+// CSM matice
+uniform mat4 mvpLight0;
+uniform mat4 mvpLight1;
+uniform mat4 mvpLight2;
 
 // PBR uniformy
 uniform int hasNormalMap = 0;
@@ -61,22 +65,50 @@ void main()
     float NdotL = max(dot(N, L), 0.0);
     float NdotV = max(dot(N, V), 0.0);
 
-    // Stiny
+    // Stiny (CSM kaskády)
+    float dist = length(viewPos - fragPosition);
+    int cascadeIndex = 2;
+    vec4 fragPositionLight;
+    vec2 cascadeOffset = vec2(0.0, 0.0);
+
+    if (dist < 8.0)
+    {
+        cascadeIndex = 0;
+        fragPositionLight = mvpLight0 * vec4(fragPosition, 1.0);
+        cascadeOffset = vec2(0.0, 0.5);
+    }
+    else if (dist < 25.0)
+    {
+        cascadeIndex = 1;
+        fragPositionLight = mvpLight1 * vec4(fragPosition, 1.0);
+        cascadeOffset = vec2(0.5, 0.5);
+    }
+    else
+    {
+        cascadeIndex = 2;
+        fragPositionLight = mvpLight2 * vec4(fragPosition, 1.0);
+        cascadeOffset = vec2(0.0, 0.0);
+    }
+
     vec3 shadowIndex = (fragPositionLight.xyz / fragPositionLight.w) * 0.5 + 0.5;
     float shadow = 0.0;
+    vec2 shadowCoord = shadowIndex.xy * 0.5 + cascadeOffset;
 
     if (shadowIndex.x >= 0.0 && shadowIndex.x <= 1.0 &&
         shadowIndex.y >= 0.0 && shadowIndex.y <= 1.0 &&
         shadowIndex.z >= 0.0 && shadowIndex.z <= 1.0)
     {
         float bias = max(0.002 * (1.0 - dot(N, L)), 0.0005);
-        vec2 texelSize = vec2(1.0 / 2048.0);
+        if (cascadeIndex == 0) bias *= 0.1;
+        else if (cascadeIndex == 1) bias *= 0.5;
+
+        vec2 texelSize = vec2(1.0 / 4096.0);
         
         for (int x = -1; x <= 1; ++x)
         {
             for (int y = -1; y <= 1; ++y)
             {
-                float pcfDepth = texture(shadowMap, shadowIndex.xy + vec2(x, y) * texelSize).r;
+                float pcfDepth = texture(shadowMap, shadowCoord + vec2(x, y) * texelSize).r;
                 shadow += (shadowIndex.z - bias > pcfDepth) ? 0.0 : 1.0;
             }
         }

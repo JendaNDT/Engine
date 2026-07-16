@@ -21,9 +21,12 @@ public sealed class InspectorPanel
     private readonly Store<TriggerComponent> _triggers;
     private readonly Store<ActionComponent> _actions;
     private readonly Store<LightComponent> _lights;
+    private readonly Store<PrefabLink> _prefabLinks;
 
     public Action? OnFocus;
     public Action? OnChanged;
+    public Action<int>? OnRevertPrefab;
+    public Action<int>? OnApplyPrefab;
 
     private string[] _availableTextures = [];
     private string[] _availableAudioClips = [];
@@ -56,6 +59,7 @@ public sealed class InspectorPanel
         _triggers = world.Store<TriggerComponent>();
         _actions = world.Store<ActionComponent>();
         _lights = world.Store<LightComponent>();
+        _prefabLinks = world.Store<PrefabLink>();
 
         ScanAssets();
     }
@@ -156,6 +160,82 @@ public sealed class InspectorPanel
             if (ImGui.InputText("Nazev", ref buf, 64))
                 n.Value = buf;
             if (ImGui.IsItemDeactivatedAfterEdit()) OnChanged?.Invoke();
+        }
+
+        // --- Prefab Link ---
+        if (MiniEngine.Engine.SceneSerializer.IsPartOfPrefab(_transforms, _prefabLinks, e, out int prefabRoot))
+        {
+            var pl = _prefabLinks.Get(prefabRoot);
+            ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.85f, 0.5f, 0.2f, 0.2f));
+            if (ImGui.CollapsingHeader($"🧩 Prefab Instance ({System.IO.Path.GetFileName(pl.PrefabPath)})", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                ImGui.Indent();
+                ImGui.TextDisabled($"Cesta: assets/{pl.PrefabPath}");
+                if (e != prefabRoot)
+                {
+                    ImGui.TextDisabled("Vybraný objekt je součástí prefabu.");
+                }
+
+                // Počet overrides
+                var overrides = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>();
+                int overrideCount = 0;
+                if (!string.IsNullOrEmpty(pl.Overrides))
+                {
+                    try
+                    {
+                        var deserialized = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>>(pl.Overrides);
+                        if (deserialized != null)
+                        {
+                            overrides = deserialized;
+                            foreach (var kvp in overrides)
+                            {
+                                if (kvp.Value != null) overrideCount += kvp.Value.Count;
+                            }
+                        }
+                    }
+                    catch {}
+                }
+                ImGui.Text($"Lokální změny (overrides): {overrideCount}");
+
+                if (overrideCount > 0)
+                {
+                    if (ImGui.TreeNode("Detail změn..."))
+                    {
+                        foreach (var kvp in overrides)
+                        {
+                            int relIdx = int.Parse(kvp.Key);
+                            string entName = $"Entity ({relIdx})";
+                            var sceneSubtree = new System.Collections.Generic.List<int>();
+                            MiniEngine.Engine.SceneSerializer.GetDfsSubtree(_transforms, prefabRoot, sceneSubtree);
+                            if (relIdx >= 0 && relIdx < sceneSubtree.Count)
+                            {
+                                int sEnt = sceneSubtree[relIdx];
+                                if (_names.Has(sEnt)) entName = _names.Get(sEnt).Value;
+                            }
+
+                            foreach (var prop in kvp.Value)
+                            {
+                                ImGui.TextDisabled($"- {entName}: {prop}");
+                            }
+                        }
+                        ImGui.TreePop();
+                    }
+                }
+
+                ImGui.Spacing();
+                if (ImGui.Button("Revert to Prefab"))
+                {
+                    OnRevertPrefab?.Invoke(prefabRoot);
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("Apply to Prefab"))
+                {
+                    OnApplyPrefab?.Invoke(prefabRoot);
+                }
+                ImGui.Unindent();
+                ImGui.Separator();
+            }
+            ImGui.PopStyleColor();
         }
 
         // --- Transform ---

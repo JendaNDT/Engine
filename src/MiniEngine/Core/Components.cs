@@ -256,3 +256,12 @@ public struct LightComponent
         Intensity = 1f
     };
 }
+
+/// <summary>
+/// Odkaz na původní prefab a lokální overrides (přepsané vlastnosti).
+/// </summary>
+public struct PrefabLink
+{
+    public string PrefabPath;
+    public string Overrides; // JSON string s přepsanými vlastnostmi
+}

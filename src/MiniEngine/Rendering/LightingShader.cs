@@ -19,11 +19,15 @@ public sealed class LightingShader : IDisposable
     private int _locAmbient;
     private int _locSpec;
 
-    // Shadow Mapping
+    // Shadow Mapping (CSM)
     public uint ShadowFboId;
     public Texture2D ShadowMapTexture;
-    public Matrix4x4 LightMvp;
-    private int _locMvpLight;
+    public Matrix4x4 LightMvp0;
+    public Matrix4x4 LightMvp1;
+    public Matrix4x4 LightMvp2;
+    private int _locMvpLight0;
+    private int _locMvpLight1;
+    private int _locMvpLight2;
     private int _locShadowMap;
 
     public int LocHasNormalMap;
@@ -50,12 +54,12 @@ public sealed class LightingShader : IDisposable
             Path.Combine(dir, "lighting.vs"),
             Path.Combine(dir, "lighting.fs"));
 
-        // Inicializace stinové mapy
+        // Inicializace stinové mapy (CSM - Atlas 4096x4096)
         ShadowMapTexture = new Texture2D
         {
-            Id = Rlgl.LoadTextureDepth(2048, 2048, false),
-            Width = 2048,
-            Height = 2048,
+            Id = Rlgl.LoadTextureDepth(4096, 4096, false),
+            Width = 4096,
+            Height = 4096,
             Mipmaps = 1,
             Format = PixelFormat.UncompressedR32
         };
@@ -99,7 +103,9 @@ public sealed class LightingShader : IDisposable
         _locAmbient = Raylib.GetShaderLocation(Shader, "ambientColor");
         _locSpec = Raylib.GetShaderLocation(Shader, "specStrength");
 
-        _locMvpLight = Raylib.GetShaderLocation(Shader, "mvpLight");
+        _locMvpLight0 = Raylib.GetShaderLocation(Shader, "mvpLight0");
+        _locMvpLight1 = Raylib.GetShaderLocation(Shader, "mvpLight1");
+        _locMvpLight2 = Raylib.GetShaderLocation(Shader, "mvpLight2");
         _locShadowMap = Raylib.GetShaderLocation(Shader, "shadowMap");
 
         LocHasNormalMap = Raylib.GetShaderLocation(Shader, "hasNormalMap");
@@ -117,8 +123,10 @@ public sealed class LightingShader : IDisposable
         Raylib.SetShaderValue(Shader, _locAmbient, Ambient, ShaderUniformDataType.Vec3);
         Raylib.SetShaderValue(Shader, _locSpec, SpecStrength, ShaderUniformDataType.Float);
 
-        // Stinove uniformy
-        Raylib.SetShaderValueMatrix(Shader, _locMvpLight, LightMvp);
+        // Stinove uniformy (CSM)
+        Raylib.SetShaderValueMatrix(Shader, _locMvpLight0, LightMvp0);
+        Raylib.SetShaderValueMatrix(Shader, _locMvpLight1, LightMvp1);
+        Raylib.SetShaderValueMatrix(Shader, _locMvpLight2, LightMvp2);
         Raylib.SetShaderValueTexture(Shader, _locShadowMap, ShadowMapTexture);
     }
 

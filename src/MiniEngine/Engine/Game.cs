@@ -36,6 +36,7 @@ public sealed class Game : IDisposable
     private readonly Store<TriggerComponent> _triggers;
     private readonly Store<ActionComponent> _actions;
     private readonly Store<LightComponent> _lights;
+    private readonly Store<PrefabLink> _prefabLinks;
     private readonly ParticleSystem _particleSystem = new();
     private readonly AudioSystem _audioSystem = new();
     private readonly BehaviorSystem _behaviorSystem = new();
@@ -62,8 +63,15 @@ public sealed class Game : IDisposable
     private HierarchyPanel _hierarchy = null!;
     private InspectorPanel _inspector = null!;
     private LightPanel _lightPanel = null!;
-    private readonly System.Collections.Generic.List<string> _undoStack = new();
-    private readonly System.Collections.Generic.List<string> _redoStack = new();
+    private readonly MiniEngine.Editor.History.CommandHistory _history = new();
+    private int _lastSelectionIndex = -1;
+    private MiniEngine.Editor.History.EntitySnapshot _preEditSnapshot = null!;
+    private bool _wasAnyItemActive;
+    private LightComponent _preEditLightComponent;
+    private LightingSettingsData _preEditLighting = null!;
+    private PostProcessingSettingsData _preEditPostProcess = null!;
+    private Transform _gizmoStartTransform;
+    private bool _gizmoWasDragging;
     private bool _showGrid = true;
     private float _gridSpacing = 1f;
     private bool _snapEnabledVal = false;
@@ -103,6 +111,7 @@ public sealed class Game : IDisposable
         _triggers = _world.Store<TriggerComponent>();
         _actions = _world.Store<ActionComponent>();
         _lights = _world.Store<LightComponent>();
+        _prefabLinks = _world.Store<PrefabLink>();
     }
 
     public void Run()
@@ -172,7 +181,9 @@ public sealed class Game : IDisposable
         _hierarchy = new HierarchyPanel(_world);
         _inspector = new InspectorPanel(_world);
         _inspector.OnFocus = FocusSelection;
-        _inspector.OnChanged = RecordHistoryState;
+        _inspector.OnChanged = OnInspectorOrPanelChanged;
+        _inspector.OnRevertPrefab = RevertPrefab;
+        _inspector.OnApplyPrefab = ApplyPrefab;
         _lightPanel = new LightPanel(_lighting, _viewport.PostProcessor);
         _drawSceneCached = DrawScene;
         _viewport.DrawToolbar = DrawViewportToolbar;   // jednou, ne per frame (delegat)
@@ -181,8 +192,8 @@ public sealed class Game : IDisposable
         _hierarchy.OnDuplicate = DuplicateSelected;
         _hierarchy.OnDelete = DeleteSelected;
         _hierarchy.OnReparent = ReparentEntity;
-        _hierarchy.OnChanged = RecordHistoryState;
-        _lightPanel.OnChanged = RecordHistoryState;
+        _hierarchy.OnChanged = OnInspectorOrPanelChanged;
+        _lightPanel.OnChanged = OnGlobalLightingOrPostProcessChanged;
         _hierarchy.OnCreateEmpty = CreateEmptyEntity;
         _hierarchy.OnCreateChildOf = CreateChildOf;
         _hierarchy.OnSavePrefab = SaveSelectedPrefab;
@@ -217,7 +228,10 @@ public sealed class Game : IDisposable
         RefreshAssetFiles();
         CreateDemoScene();
         TryLoadTestModel();   // az PO InitWindow - LoadModel nahrava na GPU
-        RecordHistoryState();
+        _history.Clear();
+        _preEditSnapshot = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, _selection.EntityIndex);
+        _preEditLighting = CaptureLightingSnapshot();
+        _preEditPostProcess = CapturePostProcessSnapshot();
 
         while (!Raylib.WindowShouldClose())
         {
@@ -226,33 +240,86 @@ public sealed class Game : IDisposable
 
             Update(dt);
 
-            // --- SHADOW PASS ---
-            Camera3D shadowCamera = new Camera3D
-            {
-                Position = -_lighting.SunDirection * 35.0f,
-                Target = Vector3.Zero,
-                Up = new Vector3(0.0f, 1.0f, 0.0f),
-                FovY = 60.0f,
-                Projection = CameraProjection.Orthographic
-            };
-
+            // --- SHADOW PASS (CSM - 3 Kaskády) ---
             RenderTexture2D shadowMapRT = new RenderTexture2D
             {
                 Id = _lighting.ShadowFboId,
-                Texture = new Texture2D { Id = 0, Width = 2048, Height = 2048 },
-                Depth = new Texture2D { Id = _lighting.ShadowMapTexture.Id, Width = 2048, Height = 2048 }
+                Texture = new Texture2D { Id = 0, Width = 4096, Height = 4096 },
+                Depth = new Texture2D { Id = _lighting.ShadowMapTexture.Id, Width = 4096, Height = 4096 }
             };
 
             Raylib.BeginTextureMode(shadowMapRT);
             Rlgl.ColorMask(false, false, false, false);
             Rlgl.ClearScreenBuffers();
-            
-            Raylib.BeginMode3D(shadowCamera);
-            _lighting.LightMvp = Rlgl.GetMatrixModelview() * Rlgl.GetMatrixProjection();
-            DrawSceneGeometries();
-            Raylib.EndMode3D();
-            
+
+            // Kaskáda 0: Blízká (0.1m - 8m)
+            {
+                float radius;
+                Vector3 center;
+                ComputeCascadeBounds(_camera.Camera, 0.1f, 8.0f, out center, out radius);
+                
+                Camera3D shadowCamera = new Camera3D
+                {
+                    Position = center - Vector3.Normalize(_lighting.SunDirection) * (radius * 2.0f),
+                    Target = center,
+                    Up = MathF.Abs(_lighting.SunDirection.Y) < 0.99f ? Vector3.UnitY : Vector3.UnitZ,
+                    FovY = radius * 2.0f,
+                    Projection = CameraProjection.Orthographic
+                };
+
+                Rlgl.Viewport(0, 2048, 2048, 2048);
+                Raylib.BeginMode3D(shadowCamera);
+                _lighting.LightMvp0 = Rlgl.GetMatrixModelview() * Rlgl.GetMatrixProjection();
+                DrawSceneGeometries();
+                Raylib.EndMode3D();
+            }
+
+            // Kaskáda 1: Střední (8m - 25m)
+            {
+                float radius;
+                Vector3 center;
+                ComputeCascadeBounds(_camera.Camera, 8.0f, 25.0f, out center, out radius);
+                
+                Camera3D shadowCamera = new Camera3D
+                {
+                    Position = center - Vector3.Normalize(_lighting.SunDirection) * (radius * 2.0f),
+                    Target = center,
+                    Up = MathF.Abs(_lighting.SunDirection.Y) < 0.99f ? Vector3.UnitY : Vector3.UnitZ,
+                    FovY = radius * 2.0f,
+                    Projection = CameraProjection.Orthographic
+                };
+
+                Rlgl.Viewport(2048, 2048, 2048, 2048);
+                Raylib.BeginMode3D(shadowCamera);
+                _lighting.LightMvp1 = Rlgl.GetMatrixModelview() * Rlgl.GetMatrixProjection();
+                DrawSceneGeometries();
+                Raylib.EndMode3D();
+            }
+
+            // Kaskáda 2: Daleká (25m - 75m)
+            {
+                float radius;
+                Vector3 center;
+                ComputeCascadeBounds(_camera.Camera, 25.0f, 75.0f, out center, out radius);
+                
+                Camera3D shadowCamera = new Camera3D
+                {
+                    Position = center - Vector3.Normalize(_lighting.SunDirection) * (radius * 2.0f),
+                    Target = center,
+                    Up = MathF.Abs(_lighting.SunDirection.Y) < 0.99f ? Vector3.UnitY : Vector3.UnitZ,
+                    FovY = radius * 2.0f,
+                    Projection = CameraProjection.Orthographic
+                };
+
+                Rlgl.Viewport(0, 0, 2048, 2048);
+                Raylib.BeginMode3D(shadowCamera);
+                _lighting.LightMvp2 = Rlgl.GetMatrixModelview() * Rlgl.GetMatrixProjection();
+                DrawSceneGeometries();
+                Raylib.EndMode3D();
+            }
+
             Rlgl.ColorMask(true, true, true, true);
+            Rlgl.Viewport(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
             Raylib.EndTextureMode();
 
             // 1) scena do offscreen textury
@@ -269,6 +336,23 @@ public sealed class Game : IDisposable
             Raylib.ClearBackground(new Color(18, 18, 20, 255));
 
             rlImGui.Begin();
+
+            // Sledování interakcí v editoru pro transakční historii (Undo/Redo)
+            int selectedIndex = _selection.EntityIndex;
+            if (selectedIndex != _lastSelectionIndex)
+            {
+                _preEditSnapshot = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, selectedIndex);
+                _lastSelectionIndex = selectedIndex;
+            }
+            bool anyItemActive = ImGui.IsAnyItemActive();
+            if (anyItemActive && !_wasAnyItemActive && selectedIndex >= 0)
+            {
+                _preEditSnapshot = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, selectedIndex);
+                _preEditLighting = CaptureLightingSnapshot();
+                _preEditPostProcess = CapturePostProcessSnapshot();
+            }
+            _wasAnyItemActive = anyItemActive;
+
             ImGui.DockSpaceOverViewport();   // pozn.: overload se mezi verzemi ImGui.NET lisi
 
             // Vychozi rozlozeni: Hierarchy vlevo, Viewport uprostred, Inspector vpravo, Stats vlevo dole.
@@ -581,7 +665,7 @@ public sealed class Game : IDisposable
     {
         try
         {
-            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor);
+            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor, _prefabLinks);
             _hierarchy.SceneStatus = "Ulozeno: scene.json";
             ToastSystem.Show("Scéna uložena: scene.json");
         }
@@ -605,7 +689,7 @@ public sealed class Game : IDisposable
 
         try
         {
-            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor);
+            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor, _prefabLinks);
             _lightPanel.LoadFrom(_lighting.SunDirection);
             _selection.Clear();
             _hierarchy.SceneStatus = "Nacteno: scene.json";
@@ -629,13 +713,21 @@ public sealed class Game : IDisposable
         _camera.Focus(t.World.Translation, extent * 3f + 2f);
     }
 
-    /// <summary>Prevesi entitu pod noveho rodice (-1 = koren), world poza zustava.</summary>
     private void ReparentEntity(int child, int newParent)
     {
+        if (!_transforms.Has(child)) return;
+
+        var oldT = _transforms.Get(child);
         if (!TransformHierarchy.Reparent(_transforms, child, newParent))
+        {
             _hierarchy.SceneStatus = "Prevesit nejde (cyklus nebo neplatny cil)";
+        }
         else
-            RecordHistoryState();
+        {
+            var newT = _transforms.Get(child);
+            var cmd = new MiniEngine.Editor.History.ComponentChangeCommand<Transform>(_transforms, child, oldT, newT);
+            _history.PushWithoutExecute(cmd);
+        }
     }
 
     private void DrawViewportToolbar()
@@ -1093,13 +1185,15 @@ public sealed class Game : IDisposable
                 else
                 {
                     _draggingRadius = false;
-                    RecordHistoryState();
+                    var cmd = new MiniEngine.Editor.History.ComponentChangeCommand<LightComponent>(_lights, selIdx, _preEditLightComponent, light);
+                    _history.PushWithoutExecute(cmd);
                 }
             }
             else if (handleHovered && canStartDrag && Raylib.IsMouseButtonPressed(MouseButton.Left))
             {
                 _draggingRadius = true;
                 _draggingRadiusEntity = selIdx;
+                _preEditLightComponent = light;
                 _gizmoActive = true;
             }
 
@@ -1109,15 +1203,28 @@ public sealed class Game : IDisposable
             }
         }
 
-        bool wasDragging = _gizmo.Dragging;
+        bool gizmoDraggingNow = _gizmo.Dragging;
+        if (gizmoDraggingNow && !_gizmoWasDragging)
+        {
+            if (_selection.HasSelection && _transforms.Has(_selection.EntityIndex))
+            {
+                _gizmoStartTransform = _transforms.Get(_selection.EntityIndex);
+            }
+        }
 
         _gizmoActive |= _gizmo.UpdateInteraction(_transforms, _selection.EntityIndex,
             _viewport.GetPickRay(_camera.Camera), _camera.Camera, canStartDrag);
 
-        if (wasDragging && !_gizmo.Dragging)
+        if (_gizmoWasDragging && !_gizmo.Dragging)
         {
-            RecordHistoryState();
+            if (_selection.HasSelection && _transforms.Has(_selection.EntityIndex))
+            {
+                var currentTransform = _transforms.Get(_selection.EntityIndex);
+                var cmd = new MiniEngine.Editor.History.ComponentChangeCommand<Transform>(_transforms, _selection.EntityIndex, _gizmoStartTransform, currentTransform);
+                _history.PushWithoutExecute(cmd);
+            }
         }
+        _gizmoWasDragging = _gizmo.Dragging;
 
         // Rotace gizmem meni kvaternion mimo Inspector - jeho euler cache by jinak
         // ukazovala stare hodnoty, dokud neprepnes vyber (znamy bug ze statusu).
@@ -1161,10 +1268,13 @@ public sealed class Game : IDisposable
             oldToNew[src] = _world.Create();
         }
 
+        var cmd = new MiniEngine.Editor.History.CompositeCommand();
+
         // 3. Zkopirujeme komponenty a upravime parenty
         foreach (int src in subtree)
         {
             Entity dest = oldToNew[src];
+            cmd.Add(new MiniEngine.Editor.History.CreateBaseCommand(_world, dest));
 
             // Zkopirujeme Transform
             var t = _transforms.Get(src); // kopie structu
@@ -1182,68 +1292,72 @@ public sealed class Game : IDisposable
                     t.Parent = newParent.Index;
                 }
             }
-            _world.Add(dest, t);
+            cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Transform>(_transforms, dest.Index, null, t));
 
             // Zkopirujeme MeshRenderer
             if (_renderers.Has(src))
             {
                 var r = _renderers.Get(src);
-                if (r.ModelHandle >= 0) _assets.AddRef(r.ModelHandle);
-                _world.Add(dest, r);
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<MeshRenderer>(_renderers, dest.Index, null, r));
+                cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+                    () => { if (r.ModelHandle >= 0) _assets.AddRef(r.ModelHandle); },
+                    () => { if (r.ModelHandle >= 0) _assets.Release(r.ModelHandle); }
+                ));
             }
 
             // Zkopirujeme LightComponent
             if (_lights.Has(src))
             {
-                _world.Add(dest, _lights.Get(src));
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<LightComponent>(_lights, dest.Index, null, _lights.Get(src)));
             }
 
             // Zkopirujeme BehaviorComponent
             if (_behaviors.Has(src))
             {
-                _world.Add(dest, _behaviors.Get(src));
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<BehaviorComponent>(_behaviors, dest.Index, null, _behaviors.Get(src)));
             }
 
             // Zkopirujeme ParticleEmitter
             if (_emitters.Has(src))
             {
-                _world.Add(dest, _emitters.Get(src));
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<ParticleEmitter>(_emitters, dest.Index, null, _emitters.Get(src)));
             }
 
             // Zkopirujeme AudioSourceComponent
             if (_audioSources.Has(src))
             {
-                _world.Add(dest, _audioSources.Get(src));
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<AudioSourceComponent>(_audioSources, dest.Index, null, _audioSources.Get(src)));
             }
 
             // Zkopirujeme TriggerComponent
             if (_triggers.Has(src))
             {
-                _world.Add(dest, _triggers.Get(src));
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<TriggerComponent>(_triggers, dest.Index, null, _triggers.Get(src)));
             }
 
             // Zkopirujeme ActionComponent
             if (_actions.Has(src))
             {
-                _world.Add(dest, _actions.Get(src));
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<ActionComponent>(_actions, dest.Index, null, _actions.Get(src)));
             }
 
             // Zkopirujeme Name
             string baseName = _names.Has(src) ? _names.Get(src).Value : $"Entita {src}";
             string newName = src == rootSrc ? $"{baseName} kopie" : baseName;
-            _world.Add(dest, new Name { Value = newName });
+            cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Name>(_names, dest.Index, null, new Name { Value = newName }));
         }
 
         // Vybereme novou kopii korene
-        _selection.EntityIndex = oldToNew[rootSrc].Index;
-        RecordHistoryState();
+        int prevSelection = _selection.EntityIndex;
+        int newSelection = oldToNew[rootSrc].Index;
+        cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+            () => { _selection.EntityIndex = newSelection; _inspector.InvalidateRotationCache(); },
+            () => { _selection.EntityIndex = prevSelection; _inspector.InvalidateRotationCache(); }
+        ));
+
+        _history.PushWithoutExecute(cmd);
     }
 
-    /// <summary>
-    /// Smaze vybranou entitu. Model handle se musi uvolnit (refcount), jinak zustane viset v pameti.
-    /// Deti se NEmazou - prevesi se na prarodice (world poza zustava). Kdyby zustaly
-    /// viset na smazanem indexu, po recyklaci indexu by se pripojily k cizi entite.
-    /// </summary>
     private void DeleteSelected()
     {
         if (_physics is not null)
@@ -1256,30 +1370,60 @@ public sealed class Game : IDisposable
         int idx = _selection.EntityIndex;
         int grandparent = _transforms.Get(idx).Parent;   // -1, kdyz mazany je root
 
+        var cmd = new MiniEngine.Editor.History.CompositeCommand();
+
+        // 1. Reparent dětí na prarodiče
         var entities = _transforms.Entities;
         for (int i = 0; i < entities.Length; i++)
         {
             int e = entities[i];
             if (e != idx && _transforms.Get(e).Parent == idx)
+            {
+                var oldT = _transforms.Get(e);
                 TransformHierarchy.Reparent(_transforms, e, grandparent);
+                var newT = _transforms.Get(e);
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Transform>(_transforms, e, oldT, newT));
+            }
         }
 
+        // 2. Záloha assetů (uvolnění při Execute, navrácení reference při Undo)
         if (_renderers.Has(idx))
         {
-            ref var r = ref _renderers.Get(idx);
-            if (r.ModelHandle >= 0) _assets.Release(r.ModelHandle);
+            var r = _renderers.Get(idx);
+            cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+                () => { if (r.ModelHandle >= 0) _assets.Release(r.ModelHandle); },
+                () => { if (r.ModelHandle >= 0) _assets.AddRef(r.ModelHandle); }
+            ));
         }
 
+        // 3. Speciální chování pro hráče
         if (idx == _playerEntity)
         {
-            _playerEntity = -1;
-            _playerBody = null;
+            var prevPlayerEntity = _playerEntity;
+            var prevPlayerBody = _playerBody;
+            cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+                () => { _playerEntity = -1; _playerBody = null; },
+                () => { _playerEntity = prevPlayerEntity; _playerBody = prevPlayerBody; }
+            ));
         }
 
-        _world.Destroy(_world.EntityFromIndex(idx));
-        _selection.Clear();
-        _gizmo.CancelDrag();
-        RecordHistoryState();
+        // 4. Záloha a odstranění všech komponent
+        var oldSnap = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, idx);
+        var newSnap = new MiniEngine.Editor.History.EntitySnapshot();
+        cmd.Add(MiniEngine.Editor.History.EntitySnapshot.CreateRestoreCommand(_world, idx, oldSnap, newSnap));
+
+        // 5. Zničení entity v registru World
+        var entity = _world.EntityFromIndex(idx);
+        cmd.Add(new MiniEngine.Editor.History.DestroyBaseCommand(_world, entity));
+
+        // 6. Změna výběru
+        int prevSelection = _selection.EntityIndex;
+        cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+            () => { _selection.Clear(); _gizmo.CancelDrag(); },
+            () => { _selection.EntityIndex = prevSelection; }
+        ));
+
+        _history.ExecuteAndPush(cmd);
     }
 
     /// <summary>
@@ -1390,6 +1534,8 @@ public sealed class Game : IDisposable
         int hitEntity = PickEntity(ray);
         if (hitEntity >= 0)
         {
+            var oldSnap = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, hitEntity);
+            
             if (!_renderers.Has(hitEntity))
             {
                 _renderers.Add(hitEntity, new MeshRenderer
@@ -1405,7 +1551,10 @@ public sealed class Game : IDisposable
                 ref var r = ref _renderers.Get(hitEntity);
                 r.AlbedoTexturePath = relPath;
             }
-            RecordHistoryState();
+
+            var postSnap = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, hitEntity);
+            var cmd = MiniEngine.Editor.History.EntitySnapshot.CreateRestoreCommand(_world, hitEntity, oldSnap, postSnap);
+            _history.PushWithoutExecute(cmd);
         }
     }
 
@@ -1420,10 +1569,21 @@ public sealed class Game : IDisposable
         var t = Transform.Identity;
         Vector3 camForward = Vector3.Normalize(_camera.Camera.Target - _camera.Camera.Position);
         t.Position = _camera.Camera.Position + camForward * 4f;
-        _world.Add(e, t);
-        _world.Add(e, new Name { Value = $"Prázdný {e.Index}" });
-        _selection.EntityIndex = e.Index;
-        RecordHistoryState();
+        
+        var name = new Name { Value = $"Prázdný {e.Index}" };
+
+        var cmd = new MiniEngine.Editor.History.CompositeCommand();
+        cmd.Add(new MiniEngine.Editor.History.CreateBaseCommand(_world, e));
+        cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Transform>(_transforms, e.Index, null, t));
+        cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Name>(_names, e.Index, null, name));
+        
+        int prevSelection = _selection.EntityIndex;
+        cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+            () => _selection.EntityIndex = e.Index,
+            () => _selection.EntityIndex = prevSelection
+        ));
+
+        _history.ExecuteAndPush(cmd);
     }
 
     private void CreateChildOf(int parentIdx)
@@ -1436,65 +1596,363 @@ public sealed class Game : IDisposable
         var e = _world.Create();
         var t = Transform.Identity;
         t.Parent = parentIdx;
-        _world.Add(e, t);
-        _world.Add(e, new Name { Value = $"Prázdný {e.Index}" });
-        _selection.EntityIndex = e.Index;
-        RecordHistoryState();
-    }
 
-    private void RecordHistoryState()
-    {
-        if (_physics is not null) return;
+        var name = new Name { Value = $"Prázdný {e.Index}" };
 
-        var data = SceneSerializer.CreateSceneData(_transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor);
-        var json = System.Text.Json.JsonSerializer.Serialize(data, SceneJsonContext.Default.SceneData);
+        var cmd = new MiniEngine.Editor.History.CompositeCommand();
+        cmd.Add(new MiniEngine.Editor.History.CreateBaseCommand(_world, e));
+        cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Transform>(_transforms, e.Index, null, t));
+        cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Name>(_names, e.Index, null, name));
 
-        if (_undoStack.Count > 0 && _undoStack[^1] == json) return;
+        int prevSelection = _selection.EntityIndex;
+        cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+            () => _selection.EntityIndex = e.Index,
+            () => _selection.EntityIndex = prevSelection
+        ));
 
-        _undoStack.Add(json);
-        if (_undoStack.Count > 30)
-            _undoStack.RemoveAt(0);
-
-        _redoStack.Clear();
+        _history.ExecuteAndPush(cmd);
     }
 
     private void Undo()
     {
-        if (_undoStack.Count <= 1) return;
+        if (!_history.CanUndo) return;
 
-        var current = _undoStack[^1];
-        _undoStack.RemoveAt(_undoStack.Count - 1);
-        _redoStack.Add(current);
+        _history.Undo();
+        _selection.Clear();
+        _gizmo.CancelDrag();
+        _hierarchy.SceneStatus = "Undo provedeno";
+        ToastSystem.Show("Zpět (Undo)");
 
-        var targetJson = _undoStack[^1];
-        var data = System.Text.Json.JsonSerializer.Deserialize(targetJson, SceneJsonContext.Default.SceneData);
-        if (data is not null)
-        {
-            SceneSerializer.ApplySceneData(data, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor);
-            _selection.Clear();
-            _gizmo.CancelDrag();
-            _hierarchy.SceneStatus = "Undo provedeno";
-            ToastSystem.Show("Zpět (Undo)");
-        }
+        // Aktualizujeme pre-edit snapshot, aby odpovídal aktuálnímu stavu
+        _preEditSnapshot = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, _selection.EntityIndex);
+        _preEditLighting = CaptureLightingSnapshot();
+        _preEditPostProcess = CapturePostProcessSnapshot();
     }
 
     private void Redo()
     {
-        if (_redoStack.Count == 0) return;
+        if (!_history.CanRedo) return;
 
-        var targetJson = _redoStack[^1];
-        _redoStack.RemoveAt(_redoStack.Count - 1);
-        _undoStack.Add(targetJson);
+        _history.Redo();
+        _selection.Clear();
+        _gizmo.CancelDrag();
+        _hierarchy.SceneStatus = "Redo provedeno";
+        ToastSystem.Show("Znovu (Redo)");
 
-        var data = System.Text.Json.JsonSerializer.Deserialize(targetJson, SceneJsonContext.Default.SceneData);
-        if (data is not null)
+        // Aktualizujeme pre-edit snapshot, aby odpovídal aktuálnímu stavu
+        _preEditSnapshot = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, _selection.EntityIndex);
+        _preEditLighting = CaptureLightingSnapshot();
+        _preEditPostProcess = CapturePostProcessSnapshot();
+    }
+
+    private void OnInspectorOrPanelChanged()
+    {
+        if (_physics is not null) return;
+
+        int selectedIndex = _selection.EntityIndex;
+        if (selectedIndex >= 0)
         {
-            SceneSerializer.ApplySceneData(data, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor);
-            _selection.Clear();
-            _gizmo.CancelDrag();
-            _hierarchy.SceneStatus = "Redo provedeno";
-            ToastSystem.Show("Znovu (Redo)");
+            var postEditSnapshot = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, selectedIndex);
+            var cmd = MiniEngine.Editor.History.EntitySnapshot.CreateRestoreCommand(_world, selectedIndex, _preEditSnapshot, postEditSnapshot);
+            _history.PushWithoutExecute(cmd);
+            _preEditSnapshot = postEditSnapshot;
+
+            UpdatePrefabOverrides(selectedIndex);
         }
+    }
+
+    private void UpdatePrefabOverrides(int entity)
+    {
+        if (SceneSerializer.IsPartOfPrefab(_transforms, _prefabLinks, entity, out int rootIdx))
+        {
+            var pl = _prefabLinks.Get(rootIdx);
+            string fullPath = Path.Combine(AppContext.BaseDirectory, "assets", pl.PrefabPath);
+            if (!File.Exists(fullPath)) return;
+
+            try
+            {
+                var prefabJson = File.ReadAllText(fullPath);
+                var prefab = System.Text.Json.JsonSerializer.Deserialize(prefabJson, SceneJsonContext.Default.SceneData);
+                if (prefab == null || prefab.Entities.Count == 0) return;
+
+                var sceneSubtree = new System.Collections.Generic.List<int>();
+                SceneSerializer.GetDfsSubtree(_transforms, rootIdx, sceneSubtree);
+
+                var prefabSubtree = new System.Collections.Generic.List<int>();
+                SceneSerializer.GetDfsSubtreeData(prefab.Entities, 0, prefabSubtree);
+
+                int relativeIdx = sceneSubtree.IndexOf(entity);
+                if (relativeIdx < 0 || relativeIdx >= prefabSubtree.Count) return;
+
+                int pEntPos = prefabSubtree[relativeIdx];
+                var pEnt = prefab.Entities[pEntPos];
+
+                var overrides = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>();
+                if (!string.IsNullOrEmpty(pl.Overrides))
+                {
+                    try
+                    {
+                        overrides = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>>(pl.Overrides);
+                    }
+                    catch { }
+                }
+                if (overrides == null) overrides = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>();
+
+                string key = relativeIdx.ToString();
+                if (!overrides.TryGetValue(key, out var list))
+                {
+                    list = new System.Collections.Generic.List<string>();
+                }
+
+                void CheckOverride<T>(bool hasCurrent, T currentVal, bool hasPrefab, T prefabVal, string propName)
+                {
+                    bool isDiff = false;
+                    if (hasCurrent != hasPrefab) isDiff = true;
+                    else if (hasCurrent && currentVal is not null && !currentVal.Equals(prefabVal)) isDiff = true;
+
+                    if (isDiff)
+                    {
+                        if (!list.Contains(propName)) list.Add(propName);
+                    }
+                    else
+                    {
+                        list.Remove(propName);
+                    }
+                }
+
+                string sName = _names.Has(entity) ? _names.Get(entity).Value : "";
+                CheckOverride(true, sName, true, pEnt.Name, "Name");
+
+                if (relativeIdx > 0 && _transforms.Has(entity))
+                {
+                    var t = _transforms.Get(entity);
+                    Vector3 pPos = pEnt.Position is { Length: >= 3 } ? new Vector3(pEnt.Position[0], pEnt.Position[1], pEnt.Position[2]) : Vector3.Zero;
+                    Quaternion pRot = pEnt.Rotation is { Length: >= 4 } ? new Quaternion(pEnt.Rotation[0], pEnt.Rotation[1], pEnt.Rotation[2], pEnt.Rotation[3]) : Quaternion.Identity;
+                    Vector3 pScale = pEnt.Scale is { Length: >= 3 } ? new Vector3(pEnt.Scale[0], pEnt.Scale[1], pEnt.Scale[2]) : Vector3.One;
+
+                    CheckOverride(true, t.Position, pEnt.Position != null, pPos, "Transform.Position");
+                    CheckOverride(true, t.Rotation, pEnt.Rotation != null, pRot, "Transform.Rotation");
+                    CheckOverride(true, t.Scale, pEnt.Scale != null, pScale, "Transform.Scale");
+                }
+
+                if (_renderers.Has(entity))
+                {
+                    var r = _renderers.Get(entity);
+                    if (pEnt.MeshRenderer != null)
+                    {
+                        Vector3 pTint = pEnt.MeshRenderer.Tint is { Length: >= 3 } ? new Vector3(pEnt.MeshRenderer.Tint[0], pEnt.MeshRenderer.Tint[1], pEnt.MeshRenderer.Tint[2]) : Vector3.One;
+                        CheckOverride(true, r.Tint, true, pTint, "MeshRenderer.Tint");
+                        CheckOverride(true, r.Visible, true, pEnt.MeshRenderer.Visible, "MeshRenderer.Visible");
+                        CheckOverride(true, r.AlbedoTexturePath, true, pEnt.MeshRenderer.AlbedoTexturePath ?? "", "MeshRenderer.AlbedoTexturePath");
+                        CheckOverride(true, r.NormalMapPath, true, pEnt.MeshRenderer.NormalMapPath ?? "", "MeshRenderer.NormalMapPath");
+                        CheckOverride(true, r.MetallicRoughnessMapPath, true, pEnt.MeshRenderer.MetallicRoughnessMapPath ?? "", "MeshRenderer.MetallicRoughnessMapPath");
+                        CheckOverride(true, r.MetallicFactor, true, pEnt.MeshRenderer.MetallicFactor, "MeshRenderer.MetallicFactor");
+                        CheckOverride(true, r.RoughnessFactor, true, pEnt.MeshRenderer.RoughnessFactor, "MeshRenderer.RoughnessFactor");
+                    }
+                    else
+                    {
+                        if (!list.Contains("MeshRenderer.Added")) list.Add("MeshRenderer.Added");
+                    }
+                }
+                else if (pEnt.MeshRenderer != null)
+                {
+                    if (!list.Contains("MeshRenderer.Removed")) list.Add("MeshRenderer.Removed");
+                }
+
+                if (_lights.Has(entity))
+                {
+                    var l = _lights.Get(entity);
+                    if (pEnt.Light != null)
+                    {
+                        Vector3 pColor = pEnt.Light.Color is { Length: >= 3 } ? new Vector3(pEnt.Light.Color[0], pEnt.Light.Color[1], pEnt.Light.Color[2]) : Vector3.One;
+                        CheckOverride(true, l.Active, true, pEnt.Light.Active, "Light.Active");
+                        CheckOverride(true, l.Color, true, pColor, "Light.Color");
+                        CheckOverride(true, l.Radius, true, pEnt.Light.Radius, "Light.Radius");
+                        CheckOverride(true, l.Intensity, true, pEnt.Light.Intensity, "Light.Intensity");
+                    }
+                    else
+                    {
+                        if (!list.Contains("Light.Added")) list.Add("Light.Added");
+                    }
+                }
+                else if (pEnt.Light != null)
+                {
+                    if (!list.Contains("Light.Removed")) list.Add("Light.Removed");
+                }
+
+                if (list.Count > 0)
+                {
+                    overrides[key] = list;
+                }
+                else
+                {
+                    overrides.Remove(key);
+                }
+
+                pl.Overrides = overrides.Count > 0 ? System.Text.Json.JsonSerializer.Serialize(overrides) : "";
+                _prefabLinks.Get(rootIdx) = pl;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Chyba aktualizace overrides: {ex.Message}");
+            }
+        }
+    }
+
+    private void RevertPrefab(int rootIdx)
+    {
+        if (_prefabLinks.Has(rootIdx))
+        {
+            var pl = _prefabLinks.Get(rootIdx);
+            pl.Overrides = "";
+            _prefabLinks.Get(rootIdx) = pl;
+
+            SceneSerializer.PropagatePrefabs(_world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _prefabLinks);
+            _hierarchy.SceneStatus = "Prefab revertnut na výchozí hodnoty";
+            ToastSystem.Show("Prefab revertnut");
+            
+            _inspector.InvalidateRotationCache();
+            _preEditSnapshot = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, _selection.EntityIndex);
+        }
+    }
+
+    private void ApplyPrefab(int rootIdx)
+    {
+        if (_prefabLinks.Has(rootIdx))
+        {
+            var pl = _prefabLinks.Get(rootIdx);
+            string fullPath = Path.Combine(AppContext.BaseDirectory, "assets", pl.PrefabPath);
+            try
+            {
+                var prefabData = SceneSerializer.CreatePrefabData(rootIdx, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _prefabLinks);
+                var json = System.Text.Json.JsonSerializer.Serialize(prefabData, SceneJsonContext.Default.SceneData);
+                File.WriteAllText(fullPath, json);
+
+                pl.Overrides = "";
+                _prefabLinks.Get(rootIdx) = pl;
+
+                _hierarchy.SceneStatus = $"Prefab uplatněn a uložen: {pl.PrefabPath}";
+                ToastSystem.Show("Prefab změny uplatněny");
+                
+                _inspector.InvalidateRotationCache();
+                _preEditSnapshot = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, _selection.EntityIndex);
+            }
+            catch (Exception ex)
+            {
+                _hierarchy.SceneStatus = $"Chyba uplatnění prefabu: {ex.Message}";
+                ToastSystem.Show($"Chyba uplatnění: {ex.Message}", 4f);
+            }
+        }
+    }
+
+    private void OnGlobalLightingOrPostProcessChanged()
+    {
+        if (_physics is not null) return;
+
+        var postEditLighting = CaptureLightingSnapshot();
+        var postEditPostProcess = CapturePostProcessSnapshot();
+
+        bool different = 
+            _preEditLighting.SunIntensity != postEditLighting.SunIntensity ||
+            _preEditLighting.SpecStrength != postEditLighting.SpecStrength ||
+            _preEditLighting.SunDirection[0] != postEditLighting.SunDirection[0] ||
+            _preEditLighting.SunDirection[1] != postEditLighting.SunDirection[1] ||
+            _preEditLighting.SunDirection[2] != postEditLighting.SunDirection[2] ||
+            _preEditLighting.SunColor[0] != postEditLighting.SunColor[0] ||
+            _preEditLighting.SunColor[1] != postEditLighting.SunColor[1] ||
+            _preEditLighting.SunColor[2] != postEditLighting.SunColor[2] ||
+            _preEditLighting.Ambient[0] != postEditLighting.Ambient[0] ||
+            _preEditLighting.Ambient[1] != postEditLighting.Ambient[1] ||
+            _preEditLighting.Ambient[2] != postEditLighting.Ambient[2] ||
+            _preEditPostProcess.Enabled != postEditPostProcess.Enabled ||
+            _preEditPostProcess.BloomIntensity != postEditPostProcess.BloomIntensity ||
+            _preEditPostProcess.BloomThreshold != postEditPostProcess.BloomThreshold ||
+            _preEditPostProcess.VignettePower != postEditPostProcess.VignettePower ||
+            _preEditPostProcess.Saturation != postEditPostProcess.Saturation ||
+            _preEditPostProcess.Contrast != postEditPostProcess.Contrast ||
+            _preEditPostProcess.ChromaticAberration != postEditPostProcess.ChromaticAberration;
+
+        if (different)
+        {
+            var cmd = new MiniEngine.Editor.History.GlobalSettingsCommand(_lighting, _viewport.PostProcessor, _preEditLighting, postEditLighting, _preEditPostProcess, postEditPostProcess);
+            _history.PushWithoutExecute(cmd);
+            _preEditLighting = postEditLighting;
+            _preEditPostProcess = postEditPostProcess;
+        }
+    }
+
+    private LightingSettingsData CaptureLightingSnapshot()
+    {
+        return new LightingSettingsData
+        {
+            SunDirection = [_lighting.SunDirection.X, _lighting.SunDirection.Y, _lighting.SunDirection.Z],
+            SunColor = [_lighting.SunColor.X, _lighting.SunColor.Y, _lighting.SunColor.Z],
+            SunIntensity = _lighting.SunIntensity,
+            Ambient = [_lighting.Ambient.X, _lighting.Ambient.Y, _lighting.Ambient.Z],
+            SpecStrength = _lighting.SpecStrength
+        };
+    }
+
+    private PostProcessingSettingsData CapturePostProcessSnapshot()
+    {
+        return new PostProcessingSettingsData
+        {
+            Enabled = _viewport.PostProcessor.Enabled,
+            BloomIntensity = _viewport.PostProcessor.BloomIntensity,
+            BloomThreshold = _viewport.PostProcessor.BloomThreshold,
+            VignettePower = _viewport.PostProcessor.VignettePower,
+            Saturation = _viewport.PostProcessor.Saturation,
+            Contrast = _viewport.PostProcessor.Contrast,
+            ChromaticAberration = _viewport.PostProcessor.ChromaticAberration
+        };
+    }
+
+    private void RecordPrefabSpawn(System.Collections.Generic.HashSet<int> beforeAlive, int newRoot, string relPath)
+    {
+        var cmd = new MiniEngine.Editor.History.CompositeCommand();
+        var afterAlive = new System.Collections.Generic.List<Entity>();
+        
+        var entities = _transforms.Entities;
+        for (int i = 0; i < entities.Length; i++)
+        {
+            int idx = entities[i];
+            if (!beforeAlive.Contains(idx))
+            {
+                afterAlive.Add(_world.EntityFromIndex(idx));
+            }
+        }
+
+        foreach (var entity in afterAlive)
+        {
+            int idx = entity.Index;
+            cmd.Add(new MiniEngine.Editor.History.CreateBaseCommand(_world, entity));
+
+            if (_names.Has(idx)) cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Name>(_names, idx, null, _names.Get(idx)));
+            if (_transforms.Has(idx)) cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Transform>(_transforms, idx, null, _transforms.Get(idx)));
+            if (_renderers.Has(idx))
+            {
+                var r = _renderers.Get(idx);
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<MeshRenderer>(_renderers, idx, null, r));
+                cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+                    () => { if (r.ModelHandle >= 0) _assets.AddRef(r.ModelHandle); },
+                    () => { if (r.ModelHandle >= 0) _assets.Release(r.ModelHandle); }
+                ));
+            }
+            if (_lights.Has(idx)) cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<LightComponent>(_lights, idx, null, _lights.Get(idx)));
+            if (_behaviors.Has(idx)) cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<BehaviorComponent>(_behaviors, idx, null, _behaviors.Get(idx)));
+            if (_emitters.Has(idx)) cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<ParticleEmitter>(_emitters, idx, null, _emitters.Get(idx)));
+            if (_audioSources.Has(idx)) cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<AudioSourceComponent>(_audioSources, idx, null, _audioSources.Get(idx)));
+            if (_triggers.Has(idx)) cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<TriggerComponent>(_triggers, idx, null, _triggers.Get(idx)));
+            if (_actions.Has(idx)) cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<ActionComponent>(_actions, idx, null, _actions.Get(idx)));
+        }
+
+        int prevSelection = _selection.EntityIndex;
+        cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+            () => { _selection.EntityIndex = newRoot; _hierarchy.SceneStatus = $"Načten a spawnut prefab: {Path.GetFileName(relPath)}"; },
+            () => { _selection.EntityIndex = prevSelection; }
+        ));
+
+        _history.PushWithoutExecute(cmd);
     }
 
     /// <summary>
@@ -1630,13 +2088,27 @@ public sealed class Game : IDisposable
             var t = Transform.Identity;
             t.Position = worldPos;
             
-            _world.Add(e, t);
-            _world.Add(e, new MeshRenderer { ModelHandle = handle, Tint = Vector3.One, Visible = true });
-            _world.Add(e, new Name { Value = Path.GetFileNameWithoutExtension(relPath) });
-            
-            _selection.EntityIndex = e.Index;
-            _hierarchy.SceneStatus = $"Model přetažen a spawnut: {Path.GetFileName(relPath)}";
-            RecordHistoryState();
+            var r = new MeshRenderer { ModelHandle = handle, Tint = Vector3.One, Visible = true };
+            var n = new Name { Value = Path.GetFileNameWithoutExtension(relPath) };
+
+            var cmd = new MiniEngine.Editor.History.CompositeCommand();
+            cmd.Add(new MiniEngine.Editor.History.CreateBaseCommand(_world, e));
+            cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Transform>(_transforms, e.Index, null, t));
+            cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<MeshRenderer>(_renderers, e.Index, null, r));
+            cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Name>(_names, e.Index, null, n));
+
+            cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+                () => { }, // První načtení už proběhlo
+                () => { if (handle >= 0) _assets.Release(handle); }
+            ));
+
+            int prevSelection = _selection.EntityIndex;
+            cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+                () => { _selection.EntityIndex = e.Index; _hierarchy.SceneStatus = $"Model přetažen a spawnut: {Path.GetFileName(relPath)}"; },
+                () => { _selection.EntityIndex = prevSelection; }
+            ));
+
+            _history.PushWithoutExecute(cmd);
         }
         catch (Exception ex)
         {
@@ -1653,17 +2125,30 @@ public sealed class Game : IDisposable
 
             var e = _world.Create();
             var t = Transform.Identity;
-            
             Vector3 camForward = Vector3.Normalize(_camera.Camera.Target - _camera.Camera.Position);
             t.Position = _camera.Camera.Position + camForward * 4f;
-            
-            _world.Add(e, t);
-            _world.Add(e, new MeshRenderer { ModelHandle = handle, Tint = Vector3.One, Visible = true });
-            _world.Add(e, new Name { Value = Path.GetFileNameWithoutExtension(relPath) });
-            
-            _selection.EntityIndex = e.Index;
-            _hierarchy.SceneStatus = $"Načten a spawnut model: {Path.GetFileName(relPath)}";
-            RecordHistoryState();
+
+            var r = new MeshRenderer { ModelHandle = handle, Tint = Vector3.One, Visible = true };
+            var n = new Name { Value = Path.GetFileNameWithoutExtension(relPath) };
+
+            var cmd = new MiniEngine.Editor.History.CompositeCommand();
+            cmd.Add(new MiniEngine.Editor.History.CreateBaseCommand(_world, e));
+            cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Transform>(_transforms, e.Index, null, t));
+            cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<MeshRenderer>(_renderers, e.Index, null, r));
+            cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<Name>(_names, e.Index, null, n));
+
+            cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+                () => { }, // První načtení už proběhlo
+                () => { if (handle >= 0) _assets.Release(handle); }
+            ));
+
+            int prevSelection = _selection.EntityIndex;
+            cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
+                () => { _selection.EntityIndex = e.Index; _hierarchy.SceneStatus = $"Načten a spawnut model: {Path.GetFileName(relPath)}"; },
+                () => { _selection.EntityIndex = prevSelection; }
+            ));
+
+            _history.PushWithoutExecute(cmd);
         }
         catch (Exception ex)
         {
@@ -1685,10 +2170,16 @@ public sealed class Game : IDisposable
             var prefabData = System.Text.Json.JsonSerializer.Deserialize(json, SceneJsonContext.Default.SceneData);
             if (prefabData != null)
             {
-                int newRoot = SceneSerializer.ApplyPrefabData(prefabData, worldPos, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets);
-                _selection.EntityIndex = newRoot;
-                _hierarchy.SceneStatus = $"Prefab přetažen a spawnut: {Path.GetFileName(relPath)}";
-                RecordHistoryState();
+                var beforeAlive = new System.Collections.Generic.HashSet<int>();
+                var activeEntities = _transforms.Entities;
+                for (int i = 0; i < activeEntities.Length; i++)
+                {
+                    beforeAlive.Add(activeEntities[i]);
+                }
+
+                int newRoot = SceneSerializer.ApplyPrefabData(prefabData, worldPos, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, relPath, _prefabLinks);
+                
+                RecordPrefabSpawn(beforeAlive, newRoot, relPath);
             }
         }
         catch (Exception ex)
@@ -1713,10 +2204,17 @@ public sealed class Game : IDisposable
             {
                 Vector3 camForward = Vector3.Normalize(_camera.Camera.Target - _camera.Camera.Position);
                 Vector3 spawnPos = _camera.Camera.Position + camForward * 4f;
-                int newRoot = SceneSerializer.ApplyPrefabData(prefabData, spawnPos, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets);
-                _selection.EntityIndex = newRoot;
-                _hierarchy.SceneStatus = $"Načten a spawnut prefab: {Path.GetFileName(relPath)}";
-                RecordHistoryState();
+
+                var beforeAlive = new System.Collections.Generic.HashSet<int>();
+                var activeEntities = _transforms.Entities;
+                for (int i = 0; i < activeEntities.Length; i++)
+                {
+                    beforeAlive.Add(activeEntities[i]);
+                }
+
+                int newRoot = SceneSerializer.ApplyPrefabData(prefabData, spawnPos, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, relPath, _prefabLinks);
+                
+                RecordPrefabSpawn(beforeAlive, newRoot, relPath);
             }
         }
         catch (Exception ex)
@@ -1746,7 +2244,7 @@ public sealed class Game : IDisposable
 
         try
         {
-            var prefabData = SceneSerializer.CreatePrefabData(rootIdx, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets);
+            var prefabData = SceneSerializer.CreatePrefabData(rootIdx, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _prefabLinks);
             var json = System.Text.Json.JsonSerializer.Serialize(prefabData, SceneJsonContext.Default.SceneData);
             File.WriteAllText(fullPath, json);
             _hierarchy.SceneStatus = $"Prefab uložen: prefabs/{filename}";
@@ -1992,10 +2490,54 @@ public sealed class Game : IDisposable
                 }
                 ImGui.EndTable();
             }
-            ImGui.EndChild();
         }
+        ImGui.EndChild();
 
         ImGui.End();
+    }
+
+    private void ComputeCascadeBounds(Camera3D camera, float nearSplit, float farSplit, out Vector3 center, out float radius)
+    {
+        Vector3 camPos = camera.Position;
+        Vector3 camTarget = camera.Target;
+        Vector3 camForward = Vector3.Normalize(camTarget - camPos);
+        Vector3 camRight = Vector3.Normalize(Vector3.Cross(camForward, camera.Up));
+        Vector3 camUp = Vector3.Cross(camRight, camForward);
+
+        float fovRad = camera.FovY * MathF.PI / 180f;
+        float aspect = 1600f / 900f; // Standardní aspect ratio pro výpočet frusta
+
+        float nearHeight = 2f * MathF.Tan(fovRad / 2f) * nearSplit;
+        float nearWidth = nearHeight * aspect;
+        float farHeight = 2f * MathF.Tan(fovRad / 2f) * farSplit;
+        float farWidth = farHeight * aspect;
+
+        Vector3 nearCenter = camPos + camForward * nearSplit;
+        Vector3 farCenter = camPos + camForward * farSplit;
+
+        Vector3[] corners = new Vector3[8];
+        corners[0] = nearCenter + (camUp * nearHeight * 0.5f) - (camRight * nearWidth * 0.5f);
+        corners[1] = nearCenter + (camUp * nearHeight * 0.5f) + (camRight * nearWidth * 0.5f);
+        corners[2] = nearCenter - (camUp * nearHeight * 0.5f) - (camRight * nearWidth * 0.5f);
+        corners[3] = nearCenter - (camUp * nearHeight * 0.5f) + (camRight * nearWidth * 0.5f);
+
+        corners[4] = farCenter + (camUp * farHeight * 0.5f) - (camRight * farWidth * 0.5f);
+        corners[5] = farCenter + (camUp * farHeight * 0.5f) + (camRight * farWidth * 0.5f);
+        corners[6] = farCenter - (camUp * farHeight * 0.5f) - (camRight * farWidth * 0.5f);
+        corners[7] = farCenter - (camUp * farHeight * 0.5f) + (camRight * farWidth * 0.5f);
+
+        center = Vector3.Zero;
+        foreach (var c in corners) center += c;
+        center /= 8f;
+
+        radius = 0f;
+        foreach (var c in corners)
+        {
+            float dist = Vector3.Distance(c, center);
+            if (dist > radius) radius = dist;
+        }
+        
+        radius = MathF.Ceiling(radius * 8f) / 8f;
     }
 
     public void Dispose() { }

@@ -107,13 +107,17 @@ public sealed class Store<T> : IStore where T : struct
 public sealed class World
 {
     private readonly List<int> _generations = [];
-    private readonly Stack<int> _free = new();
+    private readonly List<int> _free = [];
     private readonly Dictionary<Type, IStore> _stores = [];
 
     public Entity Create()
     {
-        if (_free.TryPop(out int idx))
+        if (_free.Count > 0)
+        {
+            int idx = _free[_free.Count - 1];
+            _free.RemoveAt(_free.Count - 1);
             return new Entity(idx, _generations[idx]);
+        }
 
         _generations.Add(1);
         return new Entity(_generations.Count - 1, 1);
@@ -126,7 +130,15 @@ public sealed class World
             ((IStore)store).RemoveAt(e.Index);
 
         _generations[e.Index]++;
-        _free.Push(e.Index);
+        _free.Add(e.Index);
+    }
+
+    /// <summary>Vrátí entitu zpět do života (pouze pro Undo/Redo v editoru).</summary>
+    public void Undestroy(Entity e)
+    {
+        if (!e.IsValid || e.Index >= _generations.Count) return;
+        _generations[e.Index] = e.Generation;
+        _free.Remove(e.Index);
     }
 
     public bool IsAlive(Entity e) =>
