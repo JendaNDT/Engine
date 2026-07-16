@@ -18,6 +18,9 @@ public sealed class EditorViewport : IDisposable
 
     public Rendering.PostProcessing PostProcessor;
 
+    public string? DroppedModelPath { get; set; }
+    public Vector3 DroppedPosition { get; set; }
+
     /// <summary>true = uzivatel drzi pravou mys nad viewportem, kamera ma vyhradni kontrolu.</summary>
     public bool Captured { get; private set; }
     public bool Hovered { get; private set; }
@@ -52,7 +55,7 @@ public sealed class EditorViewport : IDisposable
     }
 
     /// <summary>Krok 2: ImGui okno s obrazkem. Vola se mezi rlImGui.Begin() a rlImGui.End().</summary>
-    public void DrawPanel()
+    public unsafe void DrawPanel(Camera3D camera)
     {
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
 
@@ -103,6 +106,37 @@ public sealed class EditorViewport : IDisposable
         else
         {
             rlImGui.ImageRenderTexture(_rt);
+        }
+
+        if (ImGui.BeginDragDropTarget())
+        {
+            var payload = ImGui.AcceptDragDropPayload("ASSET_MODEL_PATH");
+            if (payload.NativePtr != null)
+            {
+                unsafe
+                {
+                    int length = payload.DataSize;
+                    byte* dataPtr = (byte*)payload.Data;
+                    byte[] bytes = new byte[length];
+                    System.Runtime.InteropServices.Marshal.Copy((IntPtr)dataPtr, bytes, 0, length);
+                    string relPath = System.Text.Encoding.UTF8.GetString(bytes);
+
+                    DroppedModelPath = relPath;
+                    
+                    Ray ray = GetPickRay(camera);
+                    if (MathF.Abs(ray.Direction.Y) > 0.0001f)
+                    {
+                        float t = -ray.Position.Y / ray.Direction.Y;
+                        if (t > 0f) DroppedPosition = ray.Position + ray.Direction * t;
+                        else DroppedPosition = ray.Position + ray.Direction * 5f;
+                    }
+                    else
+                    {
+                        DroppedPosition = ray.Position + ray.Direction * 5f;
+                    }
+                }
+            }
+            ImGui.EndDragDropTarget();
         }
 
         Hovered = ImGui.IsItemHovered();

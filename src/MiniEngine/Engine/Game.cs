@@ -207,7 +207,12 @@ public sealed class Game : IDisposable
             float rightW = MathF.Min(360f, ws.X * 0.24f);
 
             NextWindowRect(new Vector2(wp.X + leftW, wp.Y), new Vector2(ws.X - leftW - rightW, ws.Y * 0.70f));
-            _viewport.DrawPanel();
+            _viewport.DrawPanel(_camera.Camera);
+            if (_viewport.DroppedModelPath != null)
+            {
+                SpawnModelAssetAt(_viewport.DroppedModelPath, _viewport.DroppedPosition);
+                _viewport.DroppedModelPath = null;
+            }
             HandleGizmo();     // PRED pickingem - klik na sipku nesmi zmenit vyber
 
             NextWindowRect(new Vector2(wp.X + leftW, wp.Y + ws.Y * 0.70f), new Vector2(ws.X - leftW - rightW, ws.Y * 0.30f));
@@ -988,6 +993,30 @@ public sealed class Game : IDisposable
         }
     }
 
+    private void SpawnModelAssetAt(string relPath, Vector3 worldPos)
+    {
+        try
+        {
+            string fullPath = Path.Combine(AppContext.BaseDirectory, "assets", relPath);
+            int handle = _assets.LoadModel(fullPath);
+
+            var e = _world.Create();
+            var t = Transform.Identity;
+            t.Position = worldPos;
+            
+            _world.Add(e, t);
+            _world.Add(e, new MeshRenderer { ModelHandle = handle, Tint = Vector3.One, Visible = true });
+            _world.Add(e, new Name { Value = Path.GetFileNameWithoutExtension(relPath) });
+            
+            _selection.EntityIndex = e.Index;
+            _hierarchy.SceneStatus = $"Model přetažen a spawnut: {Path.GetFileName(relPath)}";
+        }
+        catch (Exception ex)
+        {
+            _hierarchy.SceneStatus = $"Chyba přetažení: {ex.Message}";
+        }
+    }
+
     private void SpawnModelAsset(string relPath)
     {
         try
@@ -1014,7 +1043,7 @@ public sealed class Game : IDisposable
         }
     }
 
-    private void DrawAssetBrowserPanel()
+    private unsafe void DrawAssetBrowserPanel()
     {
         ImGui.Begin("Asset Browser");
 
@@ -1040,6 +1069,20 @@ public sealed class Game : IDisposable
                     if (ext == ".glb" || ext == ".gltf")
                     {
                         SpawnModelAsset(relPath);
+                    }
+                }
+
+                if (ext == ".glb" || ext == ".gltf")
+                {
+                    if (ImGui.BeginDragDropSource())
+                    {
+                        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(relPath);
+                        fixed (byte* p = bytes)
+                        {
+                            ImGui.SetDragDropPayload("ASSET_MODEL_PATH", (IntPtr)p, (uint)bytes.Length);
+                        }
+                        ImGui.Text($"Táhnutí modelu: {Path.GetFileName(relPath)}");
+                        ImGui.EndDragDropSource();
                     }
                 }
             }
