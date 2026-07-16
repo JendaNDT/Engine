@@ -21,6 +21,29 @@ public sealed class AssetManager : IDisposable
     private string[] _paths = new string[32];
     private int _count;
 
+    private readonly System.IO.FileSystemWatcher? _watcher;
+    private readonly System.Collections.Concurrent.ConcurrentQueue<string> _changedPaths = new();
+
+    public Action<string>? OnAssetChanged;
+
+    public int Count => _count;
+
+    public AssetManager()
+    {
+        if (System.IO.Directory.Exists(AssetsRoot))
+        {
+            _watcher = new System.IO.FileSystemWatcher(AssetsRoot)
+            {
+                IncludeSubdirectories = true,
+                NotifyFilter = System.IO.NotifyFilters.LastWrite | System.IO.NotifyFilters.FileName,
+                EnableRaisingEvents = true
+            };
+
+            _watcher.Changed += (s, e) => { if (!string.IsNullOrEmpty(e.FullPath)) _changedPaths.Enqueue(e.FullPath); };
+            _watcher.Renamed += (s, e) => { if (!string.IsNullOrEmpty(e.FullPath)) _changedPaths.Enqueue(e.FullPath); };
+        }
+    }
+
     /// <summary>Shader prirazeny kazdemu nove nactenemu modelu (osvetleni). Nastavuje Game.</summary>
     public Shader? DefaultShader;
 
@@ -124,8 +147,53 @@ public sealed class AssetManager : IDisposable
         return anims;
     }
 
+    public void UpdateHotReload()
+    {
+        while (_changedPaths.TryDequeue(out string? fullPath))
+        {
+            if (string.IsNullOrEmpty(fullPath) || !System.IO.File.Exists(fullPath)) continue;
+
+            string key = System.IO.Path.GetFullPath(fullPath);
+
+            if (_byPath.TryGetValue(key, out int id))
+            {
+                unsafe
+                {
+                    Shader? activeShader = null;
+                    if (_models[id].MaterialCount > 0)
+                    {
+                        activeShader = _models[id].Materials[0].Shader;
+                    }
+
+                    ResetToDefaultShader(id);
+                    Raylib.UnloadModel(_models[id]);
+
+                    _models[id] = Raylib.LoadModel(key);
+
+                    if (activeShader.HasValue)
+                    {
+                        for (int i = 0; i < _models[id].MaterialCount; i++)
+                            _models[id].Materials[i].Shader = activeShader.Value;
+                    }
+                    else if (DefaultShader is { } defShader)
+                    {
+                        SetShader(id, defShader);
+                    }
+                }
+
+                OnAssetChanged?.Invoke(key);
+            }
+            else
+            {
+                OnAssetChanged?.Invoke(key);
+            }
+        }
+    }
+
     public void Dispose()
     {
+        _watcher?.Dispose();
+
         for (int i = 0; i < _count; i++)
         {
             if (_refCounts[i] > 0)

@@ -13,11 +13,11 @@ public sealed class LightingShader : IDisposable
 {
     public Shader Shader;
 
-    private readonly int _locViewPos;
-    private readonly int _locSunDir;
-    private readonly int _locSunColor;
-    private readonly int _locAmbient;
-    private readonly int _locSpec;
+    private int _locViewPos;
+    private int _locSunDir;
+    private int _locSunColor;
+    private int _locAmbient;
+    private int _locSpec;
 
     // Vychozi hodnoty ztlumene, at sceny nejsou prepalene (puvodni donut svitil do zluta).
     public Vector3 SunDirection = Vector3.Normalize(new Vector3(-0.5f, -1f, -0.35f));
@@ -38,6 +38,32 @@ public sealed class LightingShader : IDisposable
             Path.Combine(dir, "lighting.vs"),
             Path.Combine(dir, "lighting.fs"));
 
+        LoadLocations();
+    }
+
+    public bool Reload()
+    {
+        string dir = Path.Combine(AppContext.BaseDirectory, "assets", "shaders");
+        string vsPath = Path.Combine(dir, "lighting.vs");
+        string fsPath = Path.Combine(dir, "lighting.fs");
+
+        if (!File.Exists(vsPath) || !File.Exists(fsPath))
+            return false;
+
+        Shader newShader = Raylib.LoadShader(vsPath, fsPath);
+        if (newShader.Id == 0 || newShader.Id == Rlgl.GetShaderIdDefault())
+        {
+            return false;
+        }
+
+        Raylib.UnloadShader(Shader);
+        Shader = newShader;
+        LoadLocations();
+        return true;
+    }
+
+    private void LoadLocations()
+    {
         _locViewPos = Raylib.GetShaderLocation(Shader, "viewPos");
         _locSunDir = Raylib.GetShaderLocation(Shader, "sunDir");
         _locSunColor = Raylib.GetShaderLocation(Shader, "sunColor");

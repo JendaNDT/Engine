@@ -98,6 +98,30 @@ public sealed class Game : IDisposable
         _hierarchy.OnDelete = DeleteSelected;
         _hierarchy.OnReparent = ReparentEntity;
 
+        _assets.OnAssetChanged = (path) =>
+        {
+            if (path.EndsWith(".vs") || path.EndsWith(".fs"))
+            {
+                if (_lighting.Reload())
+                {
+                    for (int i = 0; i < _assets.Count; i++)
+                    {
+                        _assets.SetShader(i, _lighting.Shader);
+                    }
+                    _cubeMaterial.Shader = _lighting.Shader;
+                    _hierarchy.SceneStatus = "Shader uspesne hot-reloaded!";
+                }
+                else
+                {
+                    _hierarchy.SceneStatus = "Chyba reloadu shaderu (GLSL syntax error?)";
+                }
+            }
+            else
+            {
+                _hierarchy.SceneStatus = $"Model hot-reloaded: {Path.GetFileName(path)}";
+            }
+        };
+
         CreateDemoScene();
         TryLoadTestModel();   // az PO InitWindow - LoadModel nahrava na GPU
 
@@ -236,6 +260,7 @@ public sealed class Game : IDisposable
             _inspector.InvalidateRotationCache();
         }
 
+        _assets.UpdateHotReload();
         _transformSystem.UpdateWorldMatrices(_transforms);
     }
 
