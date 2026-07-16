@@ -18,6 +18,7 @@ public sealed class AssetManager : IDisposable
     private readonly Dictionary<string, int> _byPath = [];
     private readonly Dictionary<string, Texture2D> _textures = [];
     private readonly Dictionary<string, Sound> _sounds = [];
+    private readonly List<int> _freeSlots = [];
     private Model[] _models = new Model[32];
     private int[] _refCounts = new int[32];
     private string[] _paths = new string[32];
@@ -59,23 +60,35 @@ public sealed class AssetManager : IDisposable
             return id;
         }
 
-        if (_count == _models.Length)
+        int targetIndex;
+        if (_freeSlots.Count > 0)
         {
-            Array.Resize(ref _models, _count * 2);
-            Array.Resize(ref _refCounts, _count * 2);
-            Array.Resize(ref _paths, _count * 2);
+            int lastIdx = _freeSlots.Count - 1;
+            targetIndex = _freeSlots[lastIdx];
+            _freeSlots.RemoveAt(lastIdx);
+        }
+        else
+        {
+            targetIndex = _count;
+            if (_count == _models.Length)
+            {
+                Array.Resize(ref _models, _count * 2);
+                Array.Resize(ref _refCounts, _count * 2);
+                Array.Resize(ref _paths, _count * 2);
+            }
+            _count++;
         }
 
         // Raylib zvladne .glb / .gltf / .obj / .iqm / .m3d
-        _models[_count] = Raylib.LoadModel(key);
-        _refCounts[_count] = 1;
-        _paths[_count] = key;
-        _byPath[key] = _count;
+        _models[targetIndex] = Raylib.LoadModel(key);
+        _refCounts[targetIndex] = 1;
+        _paths[targetIndex] = key;
+        _byPath[key] = targetIndex;
 
         if (DefaultShader is { } shader)
-            SetShader(_count, shader);
+            SetShader(targetIndex, shader);
 
-        return _count++;
+        return targetIndex;
     }
 
     /// <summary>VZDY 'ref' - navrat hodnotou by znamenal kopii struktury s pointery.</summary>
@@ -105,6 +118,9 @@ public sealed class AssetManager : IDisposable
         Raylib.UnloadModel(_models[handle]);
         _byPath.Remove(_paths[handle]);
         _refCounts[handle] = 0;
+        _paths[handle] = null!;
+        _models[handle] = default;
+        _freeSlots.Add(handle);
     }
 
     /// <summary>
@@ -149,6 +165,8 @@ public sealed class AssetManager : IDisposable
         return anims;
     }
 
+    private readonly List<Sound> _soundAliases = [];
+
     public void UpdateHotReload()
     {
         while (_changedPaths.TryDequeue(out string? fullPath))
@@ -159,6 +177,9 @@ public sealed class AssetManager : IDisposable
 
             if (_byPath.TryGetValue(key, out int id))
             {
+                // Krátká prodleva k uvolnění zámku souboru externím programem
+                System.Threading.Thread.Sleep(150);
+
                 unsafe
                 {
                     Shader? activeShader = null;
@@ -192,6 +213,27 @@ public sealed class AssetManager : IDisposable
         }
     }
 
+    public void ClearCache()
+    {
+        foreach (var tex in _textures.Values)
+        {
+            Raylib.UnloadTexture(tex);
+        }
+        _textures.Clear();
+
+        foreach (var alias in _soundAliases)
+        {
+            Raylib.UnloadSound(alias);
+        }
+        _soundAliases.Clear();
+
+        foreach (var sound in _sounds.Values)
+        {
+            Raylib.UnloadSound(sound);
+        }
+        _sounds.Clear();
+    }
+
     public void Dispose()
     {
         _watcher?.Dispose();
@@ -205,18 +247,7 @@ public sealed class AssetManager : IDisposable
             }
         }
 
-        foreach (var tex in _textures.Values)
-        {
-            Raylib.UnloadTexture(tex);
-        }
-        _textures.Clear();
-
-        foreach (var sound in _sounds.Values)
-        {
-            Raylib.UnloadSound(sound);
-        }
-        _sounds.Clear();
-
+        ClearCache();
         _count = 0;
         _byPath.Clear();
     }
@@ -253,13 +284,15 @@ public sealed class AssetManager : IDisposable
             if (!File.Exists(fullPath)) return default;
         }
 
-        if (_sounds.TryGetValue(fullPath, out var sound))
+        if (!_sounds.TryGetValue(fullPath, out var originalSound))
         {
-            return sound;
+            originalSound = Raylib.LoadSound(fullPath);
+            _sounds[fullPath] = originalSound;
         }
 
-        var newSound = Raylib.LoadSound(fullPath);
-        _sounds[fullPath] = newSound;
-        return newSound;
+        // Vytvořit samostatný alias zvuku pro nezávislé ovládání
+        var alias = Raylib.LoadSoundAlias(originalSound);
+        _soundAliases.Add(alias);
+        return alias;
     }
 }

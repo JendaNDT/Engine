@@ -92,7 +92,14 @@ public sealed class BehaviorSystem
                 {
                     Vector3 diff = targetPos - bepuBody.Pose.Position;
                     // Rychlost = dráha / čas (dt)
-                    bepuBody.Velocity.Linear = diff / dt;
+                    if (dt > 1e-6f)
+                    {
+                        bepuBody.Velocity.Linear = diff / dt;
+                    }
+                    else
+                    {
+                        bepuBody.Velocity.Linear = Vector3.Zero;
+                    }
                 }
             }
             else

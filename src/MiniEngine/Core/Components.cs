@@ -174,6 +174,11 @@ public sealed class TransformSystem
             Array.Resize(ref _stamp, Math.Max(64, Math.Max(maxIndex + 1, _stamp.Length * 2)));
 
         _frame++;
+        if (_frame <= 0)
+        {
+            _frame = 1;
+            Array.Clear(_stamp);
+        }
         for (int i = 0; i < entities.Length; i++)
             Compute(transforms, entities[i]);
     }

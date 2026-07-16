@@ -19,6 +19,8 @@ public sealed class LightPanel
     private float _azimuthDeg = DefaultAzimuth;
     private float _elevationDeg = DefaultElevation;
 
+    public Action? OnChanged;
+
     public LightPanel(LightingShader lighting, PostProcessing postProcessing)
     {
         _lighting = lighting;
@@ -41,30 +43,53 @@ public sealed class LightPanel
         ImGui.Begin("Svetlo & Efekty");
         ImGui.PushItemWidth(-110f);
 
+        bool changed = false;
+
         bool dirChanged = false;
         dirChanged |= ImGui.SliderFloat("Otoceni", ref _azimuthDeg, 0f, 360f, "%.0f st");
         dirChanged |= ImGui.SliderFloat("Vyska slunce", ref _elevationDeg, 5f, 90f, "%.0f st");
         if (dirChanged)
+        {
             UpdateDirection();
+            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+        }
 
         ImGui.SliderFloat("Sila slunce", ref _lighting.SunIntensity, 0f, 2f, "%.2f");
+        if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
         ImGui.ColorEdit3("Barva slunce", ref _lighting.SunColor);
+        if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
         ImGui.ColorEdit3("Okolni svetlo", ref _lighting.Ambient);
+        if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
         ImGui.SliderFloat("Odlesky", ref _lighting.SpecStrength, 0f, 1f, "%.2f");
+        if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
 
         ImGui.Separator();
         ImGui.Text("Post-processing (Efekty)");
 
-        ImGui.Checkbox("Aktivovat efekty", ref _postProcessing.Enabled);
+        if (ImGui.Checkbox("Aktivovat efekty", ref _postProcessing.Enabled)) changed = true;
 
         if (_postProcessing.Enabled)
         {
             ImGui.SliderFloat("Intenzita Bloom", ref _postProcessing.BloomIntensity, 0f, 2f, "%.2f");
+            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
             ImGui.SliderFloat("Jasovy prah Bloom", ref _postProcessing.BloomThreshold, 0.1f, 1.0f, "%.2f");
+            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
             ImGui.SliderFloat("Sila Vignette", ref _postProcessing.VignettePower, 0f, 1f, "%.2f");
+            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
             ImGui.SliderFloat("Saturace barev", ref _postProcessing.Saturation, 0f, 2f, "%.2f");
+            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
             ImGui.SliderFloat("Kontrast obrazu", ref _postProcessing.Contrast, 0.5f, 2.0f, "%.2f");
+            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
             ImGui.SliderFloat("Chromatická aberace", ref _postProcessing.ChromaticAberration, 0.0f, 0.08f, "%.3f");
+            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
         }
 
         ImGui.Spacing();
@@ -86,6 +111,12 @@ public sealed class LightPanel
             _postProcessing.ChromaticAberration = 0.0f;
             
             UpdateDirection();
+            changed = true;
+        }
+
+        if (changed)
+        {
+            OnChanged?.Invoke();
         }
 
         ImGui.PopItemWidth();

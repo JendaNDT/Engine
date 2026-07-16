@@ -71,6 +71,9 @@ public static class ImGuiTheme
         // Záložky (Tab)
         colors[(int)ImGuiCol.Tab] = new Vector4(0.14f, 0.14f, 0.18f, 1.00f);
         colors[(int)ImGuiCol.TabHovered] = new Vector4(0.24f, 0.24f, 0.30f, 1.00f);
+        colors[(int)ImGuiCol.TabSelected] = new Vector4(0.20f, 0.20f, 0.25f, 1.00f);
+        colors[(int)ImGuiCol.TabDimmed] = new Vector4(0.10f, 0.10f, 0.12f, 1.00f);
+        colors[(int)ImGuiCol.TabDimmedSelected] = new Vector4(0.15f, 0.15f, 0.18f, 1.00f);
 
         // Dockování a Viewporty (Docking / Nav)
         colors[(int)ImGuiCol.DockingPreview] = new Vector4(0.85f, 0.70f, 0.25f, 0.30f);

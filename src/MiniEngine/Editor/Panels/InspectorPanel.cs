@@ -28,6 +28,13 @@ public sealed class InspectorPanel
     private string[] _availableTextures = [];
     private string[] _availableAudioClips = [];
 
+    // Kešované seznamy pro comba (zamezení GC alokacím)
+    private string[] _comboTexItems = [];
+    private string[] _comboNormItems = [];
+    private string[] _comboMRItems = [];
+    private string[] _comboParticleTexItems = [];
+    private string[] _comboAudioItems = [];
+
     // Euler cache plati jen pro entitu, pro kterou byla spocitana.
     private int _eulerEntity = -1;
     private Vector3 _eulerDeg;
@@ -96,6 +103,27 @@ public sealed class InspectorPanel
         {
             _availableAudioClips = [];
         }
+
+        // Naplnění kešovaných combo seznamů
+        _comboTexItems = new string[_availableTextures.Length + 1];
+        _comboTexItems[0] = "(Žádná textura)";
+        Array.Copy(_availableTextures, 0, _comboTexItems, 1, _availableTextures.Length);
+
+        _comboNormItems = new string[_availableTextures.Length + 1];
+        _comboNormItems[0] = "(Bez normálové mapy)";
+        Array.Copy(_availableTextures, 0, _comboNormItems, 1, _availableTextures.Length);
+
+        _comboMRItems = new string[_availableTextures.Length + 1];
+        _comboMRItems[0] = "(Bez metal/roughness mapy)";
+        Array.Copy(_availableTextures, 0, _comboMRItems, 1, _availableTextures.Length);
+
+        _comboParticleTexItems = new string[_availableTextures.Length + 1];
+        _comboParticleTexItems[0] = "(Bez textury - kostky)";
+        Array.Copy(_availableTextures, 0, _comboParticleTexItems, 1, _availableTextures.Length);
+
+        _comboAudioItems = new string[_availableAudioClips.Length + 1];
+        _comboAudioItems[0] = "(Žádný zvuk)";
+        Array.Copy(_availableAudioClips, 0, _comboAudioItems, 1, _availableAudioClips.Length);
     }
 
     public void Draw(EditorSelection selection)
@@ -162,7 +190,12 @@ public sealed class InspectorPanel
         }
         if (ImGui.IsItemDeactivatedAfterEdit()) OnChanged?.Invoke();
 
-        ImGui.DragFloat3("Meritko", ref t.Scale, 0.05f);
+        if (ImGui.DragFloat3("Meritko", ref t.Scale, 0.05f))
+        {
+            t.Scale.X = MathF.Max(0.001f, t.Scale.X);
+            t.Scale.Y = MathF.Max(0.001f, t.Scale.Y);
+            t.Scale.Z = MathF.Max(0.001f, t.Scale.Z);
+        }
         if (ImGui.IsItemDeactivatedAfterEdit()) OnChanged?.Invoke();
         }
 
@@ -182,14 +215,10 @@ public sealed class InspectorPanel
             string currentTex = r.AlbedoTexturePath ?? "";
             int selectedIdx = Array.IndexOf(_availableTextures, currentTex);
 
-            string[] comboItems = new string[_availableTextures.Length + 1];
-            comboItems[0] = "(Žádná textura)";
-            Array.Copy(_availableTextures, 0, comboItems, 1, _availableTextures.Length);
-
             int comboSelect = selectedIdx + 1; // 0 = Zadne
-            if (ImGui.Combo("Textura", ref comboSelect, comboItems, comboItems.Length))
+            if (ImGui.Combo("Textura", ref comboSelect, _comboTexItems, _comboTexItems.Length))
             {
-                r.AlbedoTexturePath = comboSelect == 0 ? "" : comboItems[comboSelect];
+                r.AlbedoTexturePath = comboSelect == 0 ? "" : _comboTexItems[comboSelect];
                 OnChanged?.Invoke();
             }
             if (ImGui.BeginDragDropTarget())
@@ -210,16 +239,12 @@ public sealed class InspectorPanel
                 ImGui.EndDragDropTarget();
             }
 
-            // --- Normal map ---
             string currentNorm = r.NormalMapPath ?? "";
             int selectedNormIdx = Array.IndexOf(_availableTextures, currentNorm);
-            string[] comboNormItems = new string[_availableTextures.Length + 1];
-            comboNormItems[0] = "(Bez normálové mapy)";
-            Array.Copy(_availableTextures, 0, comboNormItems, 1, _availableTextures.Length);
             int comboNormSelect = selectedNormIdx + 1;
-            if (ImGui.Combo("Normálová mapa", ref comboNormSelect, comboNormItems, comboNormItems.Length))
+            if (ImGui.Combo("Normálová mapa", ref comboNormSelect, _comboNormItems, _comboNormItems.Length))
             {
-                r.NormalMapPath = comboNormSelect == 0 ? "" : comboNormItems[comboNormSelect];
+                r.NormalMapPath = comboNormSelect == 0 ? "" : _comboNormItems[comboNormSelect];
                 OnChanged?.Invoke();
             }
             if (ImGui.BeginDragDropTarget())
@@ -240,16 +265,12 @@ public sealed class InspectorPanel
                 ImGui.EndDragDropTarget();
             }
 
-            // --- Metallic/Roughness map ---
             string currentMR = r.MetallicRoughnessMapPath ?? "";
             int selectedMRIdx = Array.IndexOf(_availableTextures, currentMR);
-            string[] comboMRItems = new string[_availableTextures.Length + 1];
-            comboMRItems[0] = "(Bez metal/roughness mapy)";
-            Array.Copy(_availableTextures, 0, comboMRItems, 1, _availableTextures.Length);
             int comboMRSelect = selectedMRIdx + 1;
-            if (ImGui.Combo("Metal/Roughness mapa", ref comboMRSelect, comboMRItems, comboMRItems.Length))
+            if (ImGui.Combo("Metal/Roughness mapa", ref comboMRSelect, _comboMRItems, _comboMRItems.Length))
             {
-                r.MetallicRoughnessMapPath = comboMRSelect == 0 ? "" : comboMRItems[comboMRSelect];
+                r.MetallicRoughnessMapPath = comboMRSelect == 0 ? "" : _comboMRItems[comboMRSelect];
                 OnChanged?.Invoke();
             }
             if (ImGui.BeginDragDropTarget())
@@ -357,14 +378,10 @@ public sealed class InspectorPanel
                     string currentTex = emitter.TexturePath ?? "";
                     int selectedIdx = Array.IndexOf(_availableTextures, currentTex);
 
-                    string[] comboItems = new string[_availableTextures.Length + 1];
-                    comboItems[0] = "(Bez textury - kostky)";
-                    Array.Copy(_availableTextures, 0, comboItems, 1, _availableTextures.Length);
-
                     int comboSelect = selectedIdx + 1;
-                    if (ImGui.Combo("Textura částic", ref comboSelect, comboItems, comboItems.Length))
+                    if (ImGui.Combo("Textura částic", ref comboSelect, _comboParticleTexItems, _comboParticleTexItems.Length))
                     {
-                        emitter.TexturePath = comboSelect == 0 ? "" : comboItems[comboSelect];
+                        emitter.TexturePath = comboSelect == 0 ? "" : _comboParticleTexItems[comboSelect];
                         OnChanged?.Invoke();
                     }
                     if (ImGui.BeginDragDropTarget())
@@ -431,14 +448,10 @@ public sealed class InspectorPanel
             string currentClip = source.ClipPath ?? "";
             int selectedIdx = Array.IndexOf(_availableAudioClips, currentClip);
 
-            string[] comboItems = new string[_availableAudioClips.Length + 1];
-            comboItems[0] = "(Žádný zvuk)";
-            Array.Copy(_availableAudioClips, 0, comboItems, 1, _availableAudioClips.Length);
-
             int comboSelect = selectedIdx + 1; // 0 = Zadne
-            if (ImGui.Combo("Zvukový soubor", ref comboSelect, comboItems, comboItems.Length))
+            if (ImGui.Combo("Zvukový soubor", ref comboSelect, _comboAudioItems, _comboAudioItems.Length))
             {
-                source.ClipPath = comboSelect == 0 ? "" : comboItems[comboSelect];
+                source.ClipPath = comboSelect == 0 ? "" : _comboAudioItems[comboSelect];
                 OnChanged?.Invoke();
             }
             if (ImGui.BeginDragDropTarget())
@@ -578,19 +591,31 @@ public sealed class InspectorPanel
             ImGui.DragFloat3("Velikost zóny", ref trigger.Size, 0.05f, 0.1f, 50f);
             if (ImGui.IsItemDeactivatedAfterEdit()) OnChanged?.Invoke();
 
-            // Vyhledání všech entit s názvem pro spárování
-            var namesSpan = _names.Span;
-            var nameEntities = _names.Entities;
+            // Vyhledání všech entit ve scéně (přes Transform) pro spárování cílů
+            var trEntities = _transforms.Entities;
             var entityNames = new System.Collections.Generic.List<string> { "(Žádný cíl)" };
             var entityIndices = new System.Collections.Generic.List<int> { -1 };
-            for (int idx = 0; idx < namesSpan.Length; idx++)
+            for (int idx = 0; idx < trEntities.Length; idx++)
             {
-                entityNames.Add($"[{nameEntities[idx]}] {namesSpan[idx].Value}");
-                entityIndices.Add(nameEntities[idx]);
+                int entIndex = trEntities[idx];
+                if (entIndex == e) continue; // ignorovat sebe sama
+
+                string nameStr = _names.Has(entIndex) ? _names.Get(entIndex).Value : $"Entita #{entIndex}";
+                entityNames.Add($"[{entIndex}] {nameStr}");
+                entityIndices.Add(entIndex);
             }
 
             int currentTargetIndex = entityIndices.IndexOf(trigger.TargetEntity);
-            if (currentTargetIndex < 0) currentTargetIndex = 0;
+            if (currentTargetIndex < 0)
+            {
+                currentTargetIndex = 0;
+                if (trigger.TargetEntity != -1)
+                {
+                    // Cíl byl smazán z hierarchie -> vyčistíme ID cílů na -1
+                    trigger.TargetEntity = -1;
+                    OnChanged?.Invoke();
+                }
+            }
             string[] entityComboItems = entityNames.ToArray();
             if (ImGui.Combo("Cílový objekt akce", ref currentTargetIndex, entityComboItems, entityComboItems.Length))
             {
@@ -639,14 +664,10 @@ public sealed class InspectorPanel
                 string currentClip = action.ActionParam ?? "";
                 int selectedAudioIdx = Array.IndexOf(_availableAudioClips, currentClip);
 
-                string[] comboItems = new string[_availableAudioClips.Length + 1];
-                comboItems[0] = "(Žádný zvuk)";
-                Array.Copy(_availableAudioClips, 0, comboItems, 1, _availableAudioClips.Length);
-
                 int comboSelect = selectedAudioIdx + 1;
-                if (ImGui.Combo("Zvukový soubor", ref comboSelect, comboItems, comboItems.Length))
+                if (ImGui.Combo("Zvukový soubor", ref comboSelect, _comboAudioItems, _comboAudioItems.Length))
                 {
-                    action.ActionParam = comboSelect == 0 ? "" : comboItems[comboSelect];
+                    action.ActionParam = comboSelect == 0 ? "" : _comboAudioItems[comboSelect];
                     OnChanged?.Invoke();
                 }
                 if (ImGui.BeginDragDropTarget())
@@ -702,10 +723,16 @@ public sealed class InspectorPanel
                 ref var l = ref _lights.Get(e);
                 bool changed = false;
 
-                changed |= ImGui.Checkbox("Aktivní světlo", ref l.Active);
-                changed |= ImGui.ColorEdit3("Barva světla", ref l.Color);
-                changed |= ImGui.SliderFloat("Poloměr (Radius)", ref l.Radius, 0.1f, 50f, "%.1f m");
-                changed |= ImGui.SliderFloat("Intenzita světla", ref l.Intensity, 0f, 10f, "%.1f");
+                if (ImGui.Checkbox("Aktivní světlo", ref l.Active)) changed = true;
+                
+                ImGui.ColorEdit3("Barva světla", ref l.Color);
+                if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+                
+                ImGui.SliderFloat("Poloměr (Radius)", ref l.Radius, 0.1f, 50f, "%.1f m");
+                if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+                
+                ImGui.SliderFloat("Intenzita světla", ref l.Intensity, 0f, 10f, "%.1f");
+                if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
 
                 if (changed)
                 {

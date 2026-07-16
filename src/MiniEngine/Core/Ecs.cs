@@ -75,6 +75,7 @@ public sealed class Store<T> : IStore where T : struct
         int last = _count - 1;
 
         _dense[slot] = _dense[last];
+        _dense[last] = default; // Uvolneni reference pro GC
         _entities[slot] = _entities[last];
         _sparse[_entities[slot]] = slot;
         _sparse[entityIndex] = -1;

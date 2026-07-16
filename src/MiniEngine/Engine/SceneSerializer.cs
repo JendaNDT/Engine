@@ -303,10 +303,13 @@ public static class SceneSerializer
     {
         if (scene.Lighting is { } l)
         {
-            lighting.SunDirection = new Vector3(l.SunDirection[0], l.SunDirection[1], l.SunDirection[2]);
-            lighting.SunColor = new Vector3(l.SunColor[0], l.SunColor[1], l.SunColor[2]);
+            if (l.SunDirection is { Length: >= 3 })
+                lighting.SunDirection = new Vector3(l.SunDirection[0], l.SunDirection[1], l.SunDirection[2]);
+            if (l.SunColor is { Length: >= 3 })
+                lighting.SunColor = new Vector3(l.SunColor[0], l.SunColor[1], l.SunColor[2]);
             lighting.SunIntensity = l.SunIntensity;
-            lighting.Ambient = new Vector3(l.Ambient[0], l.Ambient[1], l.Ambient[2]);
+            if (l.Ambient is { Length: >= 3 })
+                lighting.Ambient = new Vector3(l.Ambient[0], l.Ambient[1], l.Ambient[2]);
             lighting.SpecStrength = l.SpecStrength;
         }
 
@@ -336,6 +339,9 @@ public static class SceneSerializer
             world.Destroy(world.EntityFromIndex(idx));
         }
 
+        // Vyčistit keš unmanaged textur a zvuků po smazání scény
+        assets.ClearCache();
+
         // 2) Nejdriv vytvorit vsechny entity (kvuli remapu Parent), pak plnit komponenty.
         var created = new int[scene.Entities.Count];
         for (int i = 0; i < scene.Entities.Count; i++)
@@ -347,10 +353,13 @@ public static class SceneSerializer
             int idx = created[i];
 
             var t = Transform.Identity;
-            t.Position = new Vector3(e.Position[0], e.Position[1], e.Position[2]);
-            t.Rotation = new Quaternion(e.Rotation[0], e.Rotation[1], e.Rotation[2], e.Rotation[3]);
-            t.Scale = new Vector3(e.Scale[0], e.Scale[1], e.Scale[2]);
-            t.Parent = e.Parent >= 0 ? created[e.Parent] : -1;
+            if (e.Position is { Length: >= 3 })
+                t.Position = new Vector3(e.Position[0], e.Position[1], e.Position[2]);
+            if (e.Rotation is { Length: >= 4 })
+                t.Rotation = new Quaternion(e.Rotation[0], e.Rotation[1], e.Rotation[2], e.Rotation[3]);
+            if (e.Scale is { Length: >= 3 })
+                t.Scale = new Vector3(e.Scale[0], e.Scale[1], e.Scale[2]);
+            t.Parent = (e.Parent >= 0 && e.Parent < created.Length) ? created[e.Parent] : -1;
             transforms.Add(idx, t);
 
             names.Add(idx, new Name { Value = e.Name });
@@ -364,7 +373,7 @@ public static class SceneSerializer
                 renderers.Add(idx, new MeshRenderer
                 {
                     ModelHandle = handle,
-                    Tint = new Vector3(mr.Tint[0], mr.Tint[1], mr.Tint[2]),
+                    Tint = mr.Tint is { Length: >= 3 } ? new Vector3(mr.Tint[0], mr.Tint[1], mr.Tint[2]) : Vector3.One,
                     Visible = mr.Visible,
                     AlbedoTexturePath = mr.AlbedoTexturePath ?? "",
                     NormalMapPath = mr.NormalMapPath ?? "",
@@ -381,15 +390,15 @@ public static class SceneSerializer
                     Active = pe.Active,
                     Type = pe.Type,
                     SpawnRate = pe.SpawnRate,
-                    ColorStart = new Vector3(pe.ColorStart[0], pe.ColorStart[1], pe.ColorStart[2]),
-                    ColorEnd = new Vector3(pe.ColorEnd[0], pe.ColorEnd[1], pe.ColorEnd[2]),
+                    ColorStart = pe.ColorStart is { Length: >= 3 } ? new Vector3(pe.ColorStart[0], pe.ColorStart[1], pe.ColorStart[2]) : Vector3.One,
+                    ColorEnd = pe.ColorEnd is { Length: >= 3 } ? new Vector3(pe.ColorEnd[0], pe.ColorEnd[1], pe.ColorEnd[2]) : Vector3.One,
                     SizeStart = pe.SizeStart,
                     SizeMiddle = pe.SizeMiddle,
                     SizeEnd = pe.SizeEnd,
                     Lifetime = pe.Lifetime,
-                    Gravity = new Vector3(pe.Gravity[0], pe.Gravity[1], pe.Gravity[2]),
-                    VelocityMin = new Vector3(pe.VelocityMin[0], pe.VelocityMin[1], pe.VelocityMin[2]),
-                    VelocityMax = new Vector3(pe.VelocityMax[0], pe.VelocityMax[1], pe.VelocityMax[2]),
+                    Gravity = pe.Gravity is { Length: >= 3 } ? new Vector3(pe.Gravity[0], pe.Gravity[1], pe.Gravity[2]) : Vector3.Zero,
+                    VelocityMin = pe.VelocityMin is { Length: >= 3 } ? new Vector3(pe.VelocityMin[0], pe.VelocityMin[1], pe.VelocityMin[2]) : Vector3.Zero,
+                    VelocityMax = pe.VelocityMax is { Length: >= 3 } ? new Vector3(pe.VelocityMax[0], pe.VelocityMax[1], pe.VelocityMax[2]) : Vector3.Zero,
                     TexturePath = pe.TexturePath ?? ""
                 });
             }
@@ -631,10 +640,13 @@ public static class SceneSerializer
             int idx = created[i];
 
             var t = Transform.Identity;
-            t.Position = new Vector3(e.Position[0], e.Position[1], e.Position[2]);
-            t.Rotation = new Quaternion(e.Rotation[0], e.Rotation[1], e.Rotation[2], e.Rotation[3]);
-            t.Scale = new Vector3(e.Scale[0], e.Scale[1], e.Scale[2]);
-            t.Parent = e.Parent >= 0 ? created[e.Parent] : -1;
+            if (e.Position is { Length: >= 3 })
+                t.Position = new Vector3(e.Position[0], e.Position[1], e.Position[2]);
+            if (e.Rotation is { Length: >= 4 })
+                t.Rotation = new Quaternion(e.Rotation[0], e.Rotation[1], e.Rotation[2], e.Rotation[3]);
+            if (e.Scale is { Length: >= 3 })
+                t.Scale = new Vector3(e.Scale[0], e.Scale[1], e.Scale[2]);
+            t.Parent = (e.Parent >= 0 && e.Parent < created.Length) ? created[e.Parent] : -1;
 
             if (i == 0)
             {
@@ -653,7 +665,7 @@ public static class SceneSerializer
                 renderers.Add(idx, new MeshRenderer
                 {
                     ModelHandle = handle,
-                    Tint = new Vector3(mr.Tint[0], mr.Tint[1], mr.Tint[2]),
+                    Tint = mr.Tint is { Length: >= 3 } ? new Vector3(mr.Tint[0], mr.Tint[1], mr.Tint[2]) : Vector3.One,
                     Visible = mr.Visible,
                     AlbedoTexturePath = mr.AlbedoTexturePath ?? "",
                     NormalMapPath = mr.NormalMapPath ?? "",
@@ -670,15 +682,15 @@ public static class SceneSerializer
                     Active = pe.Active,
                     Type = pe.Type,
                     SpawnRate = pe.SpawnRate,
-                    ColorStart = new Vector3(pe.ColorStart[0], pe.ColorStart[1], pe.ColorStart[2]),
-                    ColorEnd = new Vector3(pe.ColorEnd[0], pe.ColorEnd[1], pe.ColorEnd[2]),
+                    ColorStart = pe.ColorStart is { Length: >= 3 } ? new Vector3(pe.ColorStart[0], pe.ColorStart[1], pe.ColorStart[2]) : Vector3.One,
+                    ColorEnd = pe.ColorEnd is { Length: >= 3 } ? new Vector3(pe.ColorEnd[0], pe.ColorEnd[1], pe.ColorEnd[2]) : Vector3.One,
                     SizeStart = pe.SizeStart,
                     SizeMiddle = pe.SizeMiddle,
                     SizeEnd = pe.SizeEnd,
                     Lifetime = pe.Lifetime,
-                    Gravity = new Vector3(pe.Gravity[0], pe.Gravity[1], pe.Gravity[2]),
-                    VelocityMin = new Vector3(pe.VelocityMin[0], pe.VelocityMin[1], pe.VelocityMin[2]),
-                    VelocityMax = new Vector3(pe.VelocityMax[0], pe.VelocityMax[1], pe.VelocityMax[2]),
+                    Gravity = pe.Gravity is { Length: >= 3 } ? new Vector3(pe.Gravity[0], pe.Gravity[1], pe.Gravity[2]) : Vector3.Zero,
+                    VelocityMin = pe.VelocityMin is { Length: >= 3 } ? new Vector3(pe.VelocityMin[0], pe.VelocityMin[1], pe.VelocityMin[2]) : Vector3.Zero,
+                    VelocityMax = pe.VelocityMax is { Length: >= 3 } ? new Vector3(pe.VelocityMax[0], pe.VelocityMax[1], pe.VelocityMax[2]) : Vector3.Zero,
                     TexturePath = pe.TexturePath ?? ""
                 });
             }

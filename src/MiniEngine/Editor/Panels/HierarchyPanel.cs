@@ -109,6 +109,18 @@ public sealed class HierarchyPanel
 
         ImGui.Separator();
 
+        // Zóna pro zrušení rodiče přesunuta nahoru
+        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.2f, 0.2f, 0.22f, 1f));
+        ImGui.Selectable("  [ Přetáhni sem pro zrušení rodiče ]  ", false, ImGuiSelectableFlags.None, new Vector2(0, 24));
+        ImGui.PopStyleColor();
+        if (ImGui.BeginDragDropTarget())
+        {
+            AcceptEntityDrop(-1);
+            ImGui.EndDragDropTarget();
+        }
+
+        ImGui.Separator();
+
         BuildTree();
 
         // Zmeny (vyber, prevaseni) se aplikuji az PO pruchodu stromem -
@@ -118,15 +130,6 @@ public sealed class HierarchyPanel
 
         foreach (int root in _roots)
             DrawNode(root, selection);
-
-        // Drop zona pro zruseni rodice.
-        ImGui.Separator();
-        ImGui.Selectable("(pretazenim sem zrusis rodice)");
-        if (ImGui.BeginDragDropTarget())
-        {
-            AcceptEntityDrop(-1);
-            ImGui.EndDragDropTarget();
-        }
 
         if (_clicked != -2)
             selection.EntityIndex = _clicked;
@@ -214,7 +217,11 @@ public sealed class HierarchyPanel
                 _renameBuffer = buf;
             }
 
-            if (!ImGui.IsItemActive() && ImGui.IsMouseClicked(ImGuiMouseButton.Left) && !ImGui.IsItemHovered())
+            if (ImGui.IsKeyPressed(ImGuiKey.Escape))
+            {
+                _renamingEntity = -1;
+            }
+            else if (!ImGui.IsItemActive() && ImGui.IsMouseClicked(ImGuiMouseButton.Left) && !ImGui.IsItemHovered())
             {
                 if (_names.Has(idx))
                 {
@@ -330,7 +337,17 @@ public sealed class HierarchyPanel
         if (payload.NativePtr == null) return;   // nic se sem zrovna nepousti
 
         if (_draggedEntity >= 0 && _draggedEntity != newParent)
-            _pendingReparent = (_draggedEntity, newParent);
+        {
+            // Ochrana před zacyklením na úrovni UI
+            if (newParent >= 0 && TransformHierarchy.IsDescendantOf(_transforms, newParent, _draggedEntity))
+            {
+                ToastSystem.Show("Nelze přetáhnout objekt do vlastního potomka!");
+            }
+            else
+            {
+                _pendingReparent = (_draggedEntity, newParent);
+            }
+        }
 
         _draggedEntity = -1;
     }

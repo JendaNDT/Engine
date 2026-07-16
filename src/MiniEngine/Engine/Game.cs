@@ -144,6 +144,7 @@ public sealed class Game : IDisposable
         _hierarchy.OnDelete = DeleteSelected;
         _hierarchy.OnReparent = ReparentEntity;
         _hierarchy.OnChanged = RecordHistoryState;
+        _lightPanel.OnChanged = RecordHistoryState;
         _hierarchy.OnCreateEmpty = CreateEmptyEntity;
         _hierarchy.OnCreateChildOf = CreateChildOf;
         _hierarchy.OnSavePrefab = SaveSelectedPrefab;
@@ -272,10 +273,10 @@ public sealed class Game : IDisposable
             NextWindowRect(new Vector2(wp.X + ws.X - rightW, wp.Y + ws.Y * 0.62f), new Vector2(rightW, ws.Y * 0.38f));
             _lightPanel.Draw();
 
-            NextWindowRect(new Vector2(wp.X, wp.Y + ws.Y * 0.58f), new Vector2(leftW, ws.Y * 0.42f));
+            NextWindowRect(new Vector2(wp.X, wp.Y + ws.Y * 0.58f), new Vector2(leftW * 0.4f, ws.Y * 0.42f));
             DrawStatsPanel();
 
-            NextWindowRect(new Vector2(wp.X, wp.Y + ws.Y * 0.58f), new Vector2(leftW, ws.Y * 0.42f));
+            NextWindowRect(new Vector2(wp.X + leftW * 0.4f, wp.Y + ws.Y * 0.58f), new Vector2(leftW * 0.6f, ws.Y * 0.42f));
             _profiler.Draw();
 
             MiniEngine.Editor.ToastSystem.UpdateAndDraw(dt);
@@ -357,6 +358,7 @@ public sealed class Game : IDisposable
             if (cmdCtrl && Raylib.IsKeyPressed(KeyboardKey.D)) DuplicateSelected();
             if (cmdCtrl && Raylib.IsKeyPressed(KeyboardKey.Z)) Undo();
             if (cmdCtrl && Raylib.IsKeyPressed(KeyboardKey.Y)) Redo();
+            if (Raylib.IsKeyPressed(KeyboardKey.Delete) || Raylib.IsKeyPressed(KeyboardKey.Backspace)) DeleteSelected();
 
             // Rezim gizma jako v Unity/Unreal (W/E/R, pokud se nerozhlizime kamerou)
             if (!_viewport.Captured && !_altLooking)
@@ -377,7 +379,7 @@ public sealed class Game : IDisposable
         // na lokalni pres rodicovu World matici (z minuleho framu, to je ok).
         if (_physics is not null)
         {
-            if (_playerBody.HasValue)
+            if (_playerBody.HasValue && _physics.Simulation.Bodies.BodyExists(_playerBody.Value))
             {
                 var bodyRef = _physics.Simulation.Bodies[_playerBody.Value];
                 Vector3 currentVel = bodyRef.Velocity.Linear;
@@ -1092,6 +1094,11 @@ public sealed class Game : IDisposable
     /// </summary>
     private void DuplicateSelected()
     {
+        if (_physics is not null)
+        {
+            ToastSystem.Show("Během spuštěné fyziky nelze duplikovat objekty!", 3f);
+            return;
+        }
         if (!_selection.HasSelection || !_transforms.Has(_selection.EntityIndex)) return;
 
         int rootSrc = _selection.EntityIndex;
@@ -1147,6 +1154,42 @@ public sealed class Game : IDisposable
                 _world.Add(dest, r);
             }
 
+            // Zkopirujeme LightComponent
+            if (_lights.Has(src))
+            {
+                _world.Add(dest, _lights.Get(src));
+            }
+
+            // Zkopirujeme BehaviorComponent
+            if (_behaviors.Has(src))
+            {
+                _world.Add(dest, _behaviors.Get(src));
+            }
+
+            // Zkopirujeme ParticleEmitter
+            if (_emitters.Has(src))
+            {
+                _world.Add(dest, _emitters.Get(src));
+            }
+
+            // Zkopirujeme AudioSourceComponent
+            if (_audioSources.Has(src))
+            {
+                _world.Add(dest, _audioSources.Get(src));
+            }
+
+            // Zkopirujeme TriggerComponent
+            if (_triggers.Has(src))
+            {
+                _world.Add(dest, _triggers.Get(src));
+            }
+
+            // Zkopirujeme ActionComponent
+            if (_actions.Has(src))
+            {
+                _world.Add(dest, _actions.Get(src));
+            }
+
             // Zkopirujeme Name
             string baseName = _names.Has(src) ? _names.Get(src).Value : $"Entita {src}";
             string newName = src == rootSrc ? $"{baseName} kopie" : baseName;
@@ -1165,6 +1208,11 @@ public sealed class Game : IDisposable
     /// </summary>
     private void DeleteSelected()
     {
+        if (_physics is not null)
+        {
+            ToastSystem.Show("Během spuštěné fyziky nelze mazat objekty!", 3f);
+            return;
+        }
         if (!_selection.HasSelection || !_transforms.Has(_selection.EntityIndex)) return;
 
         int idx = _selection.EntityIndex;
@@ -1182,6 +1230,12 @@ public sealed class Game : IDisposable
         {
             ref var r = ref _renderers.Get(idx);
             if (r.ModelHandle >= 0) _assets.Release(r.ModelHandle);
+        }
+
+        if (idx == _playerEntity)
+        {
+            _playerEntity = -1;
+            _playerBody = null;
         }
 
         _world.Destroy(_world.EntityFromIndex(idx));
@@ -1205,7 +1259,7 @@ public sealed class Game : IDisposable
             if (!r.Visible) continue;
 
             ref var t = ref _transforms.Get(entities[i]);
-            RayCollision hit;
+            RayCollision hit = default;
 
             if (r.ModelHandle >= 0)
             {
@@ -1226,10 +1280,33 @@ public sealed class Game : IDisposable
             }
             else
             {
-                // AABB kolem krychle z WORLD pozy.
-                var half = TransformHierarchy.WorldScale(t.World) * 0.5f;
-                var center = t.World.Translation;
-                hit = Raylib.GetRayCollisionBox(ray, new BoundingBox(center - half, center + half));
+                // Rotovaný picking pomocí transformace paprsku do lokálního prostoru
+                if (Matrix4x4.Invert(t.World, out var invWorld))
+                {
+                    Vector3 localStart = Vector3.Transform(ray.Position, invWorld);
+                    Vector3 localDir = Vector3.Normalize(Vector3.TransformNormal(ray.Direction, invWorld));
+                    var localRay = new Ray(localStart, localDir);
+                    
+                    var localAABB = new BoundingBox(new Vector3(-0.5f, -0.5f, -0.5f), new Vector3(0.5f, 0.5f, 0.5f));
+                    var localHit = Raylib.GetRayCollisionBox(localRay, localAABB);
+                    if (localHit.Hit)
+                    {
+                        hit.Hit = true;
+                        hit.Point = Vector3.Transform(localHit.Point, t.World);
+                        hit.Distance = Vector3.Distance(ray.Position, hit.Point);
+                        hit.Normal = Vector3.Normalize(Vector3.TransformNormal(localHit.Normal, t.World));
+                    }
+                    else
+                    {
+                        hit.Hit = false;
+                    }
+                }
+                else
+                {
+                    var half = TransformHierarchy.WorldScale(t.World) * 0.5f;
+                    var center = t.World.Translation;
+                    hit = Raylib.GetRayCollisionBox(ray, new BoundingBox(center - half, center + half));
+                }
             }
 
             if (hit.Hit && hit.Distance < best)
@@ -1296,6 +1373,11 @@ public sealed class Game : IDisposable
 
     private void CreateEmptyEntity()
     {
+        if (_physics is not null)
+        {
+            ToastSystem.Show("Během spuštěné fyziky nelze vytvářet objekty!", 3f);
+            return;
+        }
         var e = _world.Create();
         var t = Transform.Identity;
         Vector3 camForward = Vector3.Normalize(_camera.Camera.Target - _camera.Camera.Position);
@@ -1308,6 +1390,11 @@ public sealed class Game : IDisposable
 
     private void CreateChildOf(int parentIdx)
     {
+        if (_physics is not null)
+        {
+            ToastSystem.Show("Během spuštěné fyziky nelze vytvářet objekty!", 3f);
+            return;
+        }
         var e = _world.Create();
         var t = Transform.Identity;
         t.Parent = parentIdx;
@@ -1548,6 +1635,11 @@ public sealed class Game : IDisposable
 
     private void SpawnPrefabAt(string relPath, Vector3 worldPos)
     {
+        if (_physics is not null)
+        {
+            ToastSystem.Show("Během spuštěné fyziky nelze spawnovat prefaby!", 3f);
+            return;
+        }
         try
         {
             string fullPath = Path.Combine(AppContext.BaseDirectory, "assets", relPath);
@@ -1569,6 +1661,11 @@ public sealed class Game : IDisposable
 
     private void SpawnPrefab(string relPath)
     {
+        if (_physics is not null)
+        {
+            ToastSystem.Show("Během spuštěné fyziky nelze spawnovat prefaby!", 3f);
+            return;
+        }
         try
         {
             string fullPath = Path.Combine(AppContext.BaseDirectory, "assets", relPath);

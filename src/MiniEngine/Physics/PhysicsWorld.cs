@@ -148,6 +148,25 @@ public sealed class PhysicsWorld : IDisposable
         _tracked.Add(handle);
     }
 
+    public void Untrack(BodyHandle handle)
+    {
+        if (_trackedSlot.TryGetValue(handle.Value, out int slot))
+        {
+            int last = _tracked.Count - 1;
+            if (slot < last)
+            {
+                _tracked[slot] = _tracked[last];
+                _prev[slot] = _prev[last];
+                _trackedSlot[_tracked[slot].Value] = slot;
+            }
+            _tracked.RemoveAt(last);
+            _trackedSlot.Remove(handle.Value);
+        }
+        
+        // Bezpecne odstraneni telesa z Bepu simulace
+        Simulation.Bodies.Remove(handle);
+    }
+
     /// <summary>Vysledna renderovaci poza: interpolace mezi predchozim a aktualnim fyzikalnim krokem.</summary>
     public (Vector3 Pos, Quaternion Rot) GetInterpolated(BodyHandle handle, float alpha)
     {

@@ -1,5 +1,5 @@
 # MiniEngine – Project Status
-*Naposledy aktualizováno: 16. 7. 2026 (Devatenáctá iterace – Kompletní dokončení všech fází vývoje)*
+*Naposledy aktualizováno: 16. 7. 2026 (Dvacátá iterace – Audit, stabilizace a optimalizace)*
 
 ## 🎯 Co to je
 Nativní C# 3D herní engine s editorem, plně multiplatformní (Windows x64 a macOS Apple Silicon ARM64) s plnou podporou kompilace **Native AOT** pro maximální výkon a nulové spouštěcí závislosti.
@@ -54,6 +54,22 @@ Nativní C# 3D herní engine s editorem, plně multiplatformní (Windows x64 a m
 * **Kompletní serializace (Fáze 6, 7, 8, 10)**: Ukládání a načítání celé scény (včetně textur, částic, zvuků a behavior skriptů) do `scene.json` (AOT safe).
 * **Dropdown výběr assetů (Fáze 13)**: Ruční přepisování cest k souborům v inspektoru nahrazeno Combo Boxy se seznamy reálně nalezených souborů na disku. Tlačítko pro obnovení seznamu souborů za chodu.
 * **Help Overlay (Fáze 19)**: Minimalizovatelný překryvný panel s nápovědou ovládání kamery a klávesových zkratek v pravém horním rohu viewportu.
+
+### 7. Audit, stabilizace a optimalizace (Fáze 20)
+* **Ošetření chyb a pádů**:
+  - Přidána robustní kontrola existence fyzikálních těles před přístupem k jejich referencím v BepuPhysics.
+  - Zablokovány veškeré destruktivní a strukturní změny scény (mazání, tvorba, duplikace, prefaby, změny rodičů) za běhu fyzikální simulace.
+  - Zavedena pojistka proti StackOverflowException při detekci zacyklení hierarchie rodičovství na úrovni UI panelu i jádra.
+  - Vstupní pole pro přejmenování reaguje na klávesu `Escape`, která okamžitě zruší editaci bez uložení změn.
+* **Prostorový úklid unmanaged paměti**:
+  - Důsledné uvolňování unmanaged rigidních těles z fyzikální simulace BepuPhysics a mazání referenčních typů ze Sparse-Set ECS polí při smazání objektu.
+  - Recyklace indexů uvolněných 3D modelů v `AssetManager` pomocí Free-Listu zabraňující neomezenému růstu polí.
+  - Uvolňování nepoužívaných textur a zvukových bufferů z GPU/RAM paměti při resetování nebo načítání nové scény.
+* **Zamezení GC alokací & Zpomalování**:
+  - Kešování polí comboboxů pro výběr textur a zvuků odstraňující periodické snímkové alokace.
+  - Throttling (deaktivace) odesílání `OnChanged` události u světel a post-processingu, spouštějící se až po uvolnění slideru, nikoliv během každého snímku tažení.
+  - Výpočet pickování otočených krychlí v lokálním prostoru pomocí inverze matice.
+  - Dynamické měřítko v Profiler grafu dle historických maxim s 10% rezervou a rozdělení překryvu Stats/Profiler oken.
 
 ---
 

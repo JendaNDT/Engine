@@ -15,8 +15,10 @@ public sealed class AudioSystem
         var entities = audioSources.Entities;
 
         Vector3 listenerPos = camera.Position;
-        Vector3 listenerForward = Vector3.Normalize(camera.Target - camera.Position);
-        Vector3 listenerRight = Vector3.Normalize(Vector3.Cross(listenerForward, camera.Up));
+        Vector3 cameraDir = camera.Target - camera.Position;
+        Vector3 listenerForward = cameraDir.LengthSquared() > 0.001f ? Vector3.Normalize(cameraDir) : new Vector3(0, 0, -1);
+        Vector3 rightDir = Vector3.Cross(listenerForward, camera.Up);
+        Vector3 listenerRight = rightDir.LengthSquared() > 0.001f ? Vector3.Normalize(rightDir) : new Vector3(1, 0, 0);
 
         for (int i = 0; i < sources.Length; i++)
         {
