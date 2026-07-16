@@ -113,6 +113,28 @@ public sealed class Game : IDisposable
         Raylib.SetTargetFPS(0);   // VSync ridi tempo
 
         rlImGui.Setup(darkTheme: true, enableDocking: true);
+
+        // Načtení vlastního písma s podporou českých znaků (Latin Extended-A)
+        unsafe
+        {
+            ushort[] ranges = new ushort[]
+            {
+                0x0020, 0x00FF, // Basic Latin + Latin-1 Supplement
+                0x0100, 0x017F, // Latin Extended-A (čeština - ěščřž atd.)
+                0
+            };
+            fixed (ushort* p = ranges)
+            {
+                var ioPtr = ImGui.GetIO();
+                string fontPath = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "Roboto-Regular.ttf");
+                if (File.Exists(fontPath))
+                {
+                    ioPtr.Fonts.AddFontFromFileTTF(fontPath, 16f, null, (IntPtr)p);
+                    rlImGui.ReloadFonts();
+                }
+            }
+        }
+
         MiniEngine.Editor.ImGuiTheme.ApplyDarkTheme();
         var io = ImGui.GetIO();
         io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
