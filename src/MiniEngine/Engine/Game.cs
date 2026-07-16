@@ -29,6 +29,7 @@ public sealed class Game : IDisposable
     private readonly ParticleSystem _particleSystem = new();
     private readonly AudioSystem _audioSystem = new();
     private readonly BehaviorSystem _behaviorSystem = new();
+    private readonly ProfilerPanel _profiler = new();
     private SkyboxRenderer _skybox = null!;
 
     // Fyzika bezi jen kdyz je zapnuta tlacitkem. STOP = dispose celeho sveta,
@@ -188,6 +189,8 @@ public sealed class Game : IDisposable
             // ImGui panely nize alokuji kvuli string interpolaci - to je OK, kresli se jen v editoru.
             _allocPerFrame = GC.GetAllocatedBytesForCurrentThread() - _allocStart;
 
+            _profiler.AddFrameData(Raylib.GetFPS(), Raylib.GetFrameTime() * 1000f, _allocPerFrame, _particleSystem.GetActiveParticlesCount());
+
             // 2) editor
             Raylib.BeginDrawing();
             Raylib.ClearBackground(new Color(18, 18, 20, 255));
@@ -222,6 +225,9 @@ public sealed class Game : IDisposable
 
             NextWindowRect(new Vector2(wp.X, wp.Y + ws.Y * 0.58f), new Vector2(leftW, ws.Y * 0.42f));
             DrawStatsPanel();
+
+            NextWindowRect(new Vector2(wp.X, wp.Y + ws.Y * 0.58f), new Vector2(leftW, ws.Y * 0.42f));
+            _profiler.Draw();
 
             rlImGui.End();
 

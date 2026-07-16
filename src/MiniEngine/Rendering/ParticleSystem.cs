@@ -30,6 +30,16 @@ public sealed class ParticleSystem
     private int _nextFreeIndex;
     private readonly Random _rng = new(1337);
 
+    public int GetActiveParticlesCount()
+    {
+        int count = 0;
+        for (int i = 0; i < _particles.Length; i++)
+        {
+            if (_particles[i].Active) count++;
+        }
+        return count;
+    }
+
     public void Update(float dt, Store<Transform> transforms, Store<ParticleEmitter> emitters)
     {
         // 1. Spawnovani novych castic
