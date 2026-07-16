@@ -59,6 +59,38 @@ public struct Name
     public string Value;
 }
 
+public struct ParticleEmitter
+{
+    public bool Active;
+    public int Type; // 0 = Fire, 1 = Smoke, 2 = Spark
+    public float SpawnRate; // částic za sekundu
+    public float SpawnTimer;
+    public Vector3 ColorStart;
+    public Vector3 ColorEnd;
+    public float SizeStart;
+    public float SizeEnd;
+    public float Lifetime;
+    public Vector3 Gravity;
+    public Vector3 VelocityMin;
+    public Vector3 VelocityMax;
+
+    public static ParticleEmitter Default => new()
+    {
+        Active = false,
+        Type = 0,
+        SpawnRate = 30f,
+        SpawnTimer = 0f,
+        ColorStart = new Vector3(1.0f, 0.5f, 0.1f),
+        ColorEnd = new Vector3(0.2f, 0.2f, 0.2f),
+        SizeStart = 0.2f,
+        SizeEnd = 0.05f,
+        Lifetime = 1.5f,
+        Gravity = new Vector3(0f, 1f, 0f),
+        VelocityMin = new Vector3(-0.5f, 1f, -0.5f),
+        VelocityMax = new Vector3(0.5f, 2f, 0.5f)
+    };
+}
+
 /// <summary>
 /// Prepocet world matic. Rodic se dopocitava rekurzivne pres "stamp" pole,
 /// takze NEZALEZI na poradi v dense poli (driv musel rodic lezet pred ditetem -

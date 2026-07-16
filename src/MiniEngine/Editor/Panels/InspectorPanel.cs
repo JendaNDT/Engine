@@ -15,6 +15,7 @@ public sealed class InspectorPanel
     private readonly Store<Transform> _transforms;
     private readonly Store<MeshRenderer> _renderers;
     private readonly Store<Name> _names;
+    private readonly Store<ParticleEmitter> _emitters;
 
     // Euler cache plati jen pro entitu, pro kterou byla spocitana.
     private int _eulerEntity = -1;
@@ -31,6 +32,7 @@ public sealed class InspectorPanel
         _transforms = world.Store<Transform>();
         _renderers = world.Store<MeshRenderer>();
         _names = world.Store<Name>();
+        _emitters = world.Store<ParticleEmitter>();
     }
 
     public void Draw(EditorSelection selection)
@@ -94,6 +96,74 @@ public sealed class InspectorPanel
             if (ImGui.InputText("Textura", ref texPath, 256))
             {
                 r.AlbedoTexturePath = texPath;
+            }
+        }
+
+        // --- ParticleEmitter ---
+        if (_emitters.Has(e))
+        {
+            ImGui.Separator();
+            ImGui.Text("ParticleEmitter");
+
+            ref var emitter = ref _emitters.Get(e);
+            ImGui.Checkbox("Aktivni", ref emitter.Active);
+
+            string[] types = ["Oheň", "Kouř", "Jiskry"];
+            int currentType = emitter.Type;
+            if (ImGui.Combo("Typ", ref currentType, types, types.Length))
+            {
+                emitter.Type = currentType;
+                if (currentType == 0) // Ohen
+                {
+                    emitter.ColorStart = new Vector3(1.0f, 0.5f, 0.1f);
+                    emitter.ColorEnd = new Vector3(0.2f, 0.2f, 0.2f);
+                    emitter.SizeStart = 0.2f;
+                    emitter.SizeEnd = 0.05f;
+                    emitter.Gravity = new Vector3(0f, 1f, 0f);
+                    emitter.VelocityMin = new Vector3(-0.5f, 1f, -0.5f);
+                    emitter.VelocityMax = new Vector3(0.5f, 2f, 0.5f);
+                }
+                else if (currentType == 1) // Kour
+                {
+                    emitter.ColorStart = new Vector3(0.4f, 0.4f, 0.4f);
+                    emitter.ColorEnd = new Vector3(0.8f, 0.8f, 0.8f);
+                    emitter.SizeStart = 0.1f;
+                    emitter.SizeEnd = 0.5f;
+                    emitter.Gravity = new Vector3(0.2f, 0.5f, 0f);
+                    emitter.VelocityMin = new Vector3(-0.2f, 0.5f, -0.2f);
+                    emitter.VelocityMax = new Vector3(0.2f, 1.2f, 0.2f);
+                }
+                else if (currentType == 2) // Jiskry
+                {
+                    emitter.ColorStart = new Vector3(1.0f, 0.9f, 0.3f);
+                    emitter.ColorEnd = new Vector3(1.0f, 0.1f, 0f);
+                    emitter.SizeStart = 0.08f;
+                    emitter.SizeEnd = 0.01f;
+                    emitter.Gravity = new Vector3(0f, -4f, 0f);
+                    emitter.VelocityMin = new Vector3(-1.5f, 2f, -1.5f);
+                    emitter.VelocityMax = new Vector3(1.5f, 5f, 1.5f);
+                }
+            }
+
+            ImGui.DragFloat("Spawn Rate", ref emitter.SpawnRate, 0.5f, 1f, 200f);
+            ImGui.ColorEdit3("Barva Start", ref emitter.ColorStart);
+            ImGui.ColorEdit3("Barva End", ref emitter.ColorEnd);
+            ImGui.DragFloat("Velikost Start", ref emitter.SizeStart, 0.01f, 0.01f, 2f);
+            ImGui.DragFloat("Velikost End", ref emitter.SizeEnd, 0.01f, 0.01f, 2f);
+            ImGui.DragFloat("Zivotnost", ref emitter.Lifetime, 0.05f, 0.1f, 10f);
+            ImGui.DragFloat3("Gravitace", ref emitter.Gravity, 0.05f);
+
+            if (ImGui.Button("Odebrat ParticleEmitter"))
+            {
+                _emitters.RemoveAt(e);
+            }
+        }
+        else
+        {
+            ImGui.Separator();
+            if (ImGui.Button("Přidat ParticleEmitter"))
+            {
+                _emitters.Add(e, ParticleEmitter.Default);
             }
         }
 

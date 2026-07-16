@@ -37,6 +37,7 @@ public sealed class EntityData
     public float[] Scale { get; set; } = [1, 1, 1];
     public int Parent { get; set; } = -1;                   // pozice rodice v Entities, -1 = root
     public MeshRendererData? MeshRenderer { get; set; }
+    public ParticleEmitterData? ParticleEmitter { get; set; }
 }
 
 public sealed class MeshRendererData
@@ -47,18 +48,34 @@ public sealed class MeshRendererData
     public string? AlbedoTexturePath { get; set; }
 }
 
+public sealed class ParticleEmitterData
+{
+    public bool Active { get; set; }
+    public int Type { get; set; }
+    public float SpawnRate { get; set; }
+    public float[] ColorStart { get; set; } = [1, 0.5f, 0.1f];
+    public float[] ColorEnd { get; set; } = [0.2f, 0.2f, 0.2f];
+    public float SizeStart { get; set; } = 0.2f;
+    public float SizeEnd { get; set; } = 0.05f;
+    public float Lifetime { get; set; } = 1.5f;
+    public float[] Gravity { get; set; } = [0, 1, 0];
+    public float[] VelocityMin { get; set; } = [-0.5f, 1f, -0.5f];
+    public float[] VelocityMax { get; set; } = [0.5f, 2f, 0.5f];
+}
+
 /// <summary>
 /// Source-generated JSON kontext - POVINNE kvuli NativeAOT.
 /// Reflexni serializace by v AOT publish spadla (viz DEEP_RESEARCH 2.3).
 /// </summary>
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(SceneData))]
+[JsonSerializable(typeof(ParticleEmitterData))]
 internal partial class SceneJsonContext : JsonSerializerContext { }
 
 public static class SceneSerializer
 {
     public static void Save(string path, Store<Transform> transforms, Store<MeshRenderer> renderers,
-        Store<Name> names, AssetManager assets, LightingShader lighting)
+        Store<Name> names, Store<ParticleEmitter> emitters, AssetManager assets, LightingShader lighting)
     {
         var scene = new SceneData();
         var entityIndexes = transforms.Entities;
@@ -95,6 +112,25 @@ public static class SceneSerializer
                 };
             }
 
+            if (emitters.Has(idx))
+            {
+                ref var pe = ref emitters.Get(idx);
+                e.ParticleEmitter = new ParticleEmitterData
+                {
+                    Active = pe.Active,
+                    Type = pe.Type,
+                    SpawnRate = pe.SpawnRate,
+                    ColorStart = [pe.ColorStart.X, pe.ColorStart.Y, pe.ColorStart.Z],
+                    ColorEnd = [pe.ColorEnd.X, pe.ColorEnd.Y, pe.ColorEnd.Z],
+                    SizeStart = pe.SizeStart,
+                    SizeEnd = pe.SizeEnd,
+                    Lifetime = pe.Lifetime,
+                    Gravity = [pe.Gravity.X, pe.Gravity.Y, pe.Gravity.Z],
+                    VelocityMin = [pe.VelocityMin.X, pe.VelocityMin.Y, pe.VelocityMin.Z],
+                    VelocityMax = [pe.VelocityMax.X, pe.VelocityMax.Y, pe.VelocityMax.Z]
+                };
+            }
+
             scene.Entities.Add(e);
         }
 
@@ -111,7 +147,7 @@ public static class SceneSerializer
     }
 
     public static void Load(string path, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
-        Store<Name> names, AssetManager assets, LightingShader lighting)
+        Store<Name> names, Store<ParticleEmitter> emitters, AssetManager assets, LightingShader lighting)
     {
         var scene = JsonSerializer.Deserialize(File.ReadAllText(path), SceneJsonContext.Default.SceneData);
         if (scene is null) return;
@@ -172,6 +208,24 @@ public static class SceneSerializer
                     Tint = new Vector3(mr.Tint[0], mr.Tint[1], mr.Tint[2]),
                     Visible = mr.Visible,
                     AlbedoTexturePath = mr.AlbedoTexturePath ?? ""
+                });
+            }
+
+            if (e.ParticleEmitter is { } pe)
+            {
+                emitters.Add(idx, new ParticleEmitter
+                {
+                    Active = pe.Active,
+                    Type = pe.Type,
+                    SpawnRate = pe.SpawnRate,
+                    ColorStart = new Vector3(pe.ColorStart[0], pe.ColorStart[1], pe.ColorStart[2]),
+                    ColorEnd = new Vector3(pe.ColorEnd[0], pe.ColorEnd[1], pe.ColorEnd[2]),
+                    SizeStart = pe.SizeStart,
+                    SizeEnd = pe.SizeEnd,
+                    Lifetime = pe.Lifetime,
+                    Gravity = new Vector3(pe.Gravity[0], pe.Gravity[1], pe.Gravity[2]),
+                    VelocityMin = new Vector3(pe.VelocityMin[0], pe.VelocityMin[1], pe.VelocityMin[2]),
+                    VelocityMax = new Vector3(pe.VelocityMax[0], pe.VelocityMax[1], pe.VelocityMax[2])
                 });
             }
         }

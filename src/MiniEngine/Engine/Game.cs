@@ -22,6 +22,8 @@ public sealed class Game : IDisposable
     private readonly Store<MeshRenderer> _renderers;
     private readonly Store<Name> _names;
     private readonly Store<RigidBodyRef> _bodies;
+    private readonly Store<ParticleEmitter> _emitters;
+    private readonly ParticleSystem _particleSystem = new();
 
     // Fyzika bezi jen kdyz je zapnuta tlacitkem. STOP = dispose celeho sveta,
     // START = novy svet postaveny z aktualnich Transformu. Zadne rucni mazani teles.
@@ -68,6 +70,7 @@ public sealed class Game : IDisposable
         _renderers = _world.Store<MeshRenderer>();
         _names = _world.Store<Name>();
         _bodies = _world.Store<RigidBodyRef>();
+        _emitters = _world.Store<ParticleEmitter>();
     }
 
     public void Run()
@@ -225,6 +228,8 @@ public sealed class Game : IDisposable
 
     private void Update(float dt)
     {
+        _particleSystem.Update(dt, _transforms, _emitters);
+
         _assetScanTimer += dt;
         if (_assetScanTimer > 2f)
         {
@@ -452,7 +457,7 @@ public sealed class Game : IDisposable
     {
         try
         {
-            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _assets, _lighting);
+            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _assets, _lighting);
             _hierarchy.SceneStatus = "Ulozeno: scene.json";
         }
         catch (Exception ex)
@@ -473,7 +478,7 @@ public sealed class Game : IDisposable
 
         try
         {
-            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _assets, _lighting);
+            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _assets, _lighting);
             _lightPanel.LoadFrom(_lighting.SunDirection);
             _selection.Clear();
             _hierarchy.SceneStatus = "Nacteno: scene.json";
@@ -628,6 +633,8 @@ public sealed class Game : IDisposable
         Raylib.DrawGrid(40, 1f);
 
         DrawSceneGeometries();
+
+        _particleSystem.Draw();
 
         // Kresleni obrysu (wires) pro vybrane objekty
         var renderers = _renderers.Span;
