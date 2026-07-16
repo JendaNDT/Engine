@@ -44,6 +44,7 @@ public sealed class MeshRendererData
     public string? ModelPath { get; set; }                  // null = placeholder krychle
     public float[] Tint { get; set; } = [1, 1, 1];
     public bool Visible { get; set; } = true;
+    public string? AlbedoTexturePath { get; set; }
 }
 
 /// <summary>
@@ -89,7 +90,8 @@ public static class SceneSerializer
                 {
                     ModelPath = r.ModelHandle >= 0 ? assets.GetRelativePath(r.ModelHandle) : null,
                     Tint = [r.Tint.X, r.Tint.Y, r.Tint.Z],
-                    Visible = r.Visible
+                    Visible = r.Visible,
+                    AlbedoTexturePath = r.AlbedoTexturePath
                 };
             }
 
@@ -168,7 +170,8 @@ public static class SceneSerializer
                 {
                     ModelHandle = handle,
                     Tint = new Vector3(mr.Tint[0], mr.Tint[1], mr.Tint[2]),
-                    Visible = mr.Visible
+                    Visible = mr.Visible,
+                    AlbedoTexturePath = mr.AlbedoTexturePath ?? ""
                 });
             }
         }

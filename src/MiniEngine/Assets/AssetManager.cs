@@ -16,6 +16,7 @@ public sealed class AssetManager : IDisposable
     public static string AssetsRoot => Path.Combine(AppContext.BaseDirectory, "assets");
 
     private readonly Dictionary<string, int> _byPath = [];
+    private readonly Dictionary<string, Texture2D> _textures = [];
     private Model[] _models = new Model[32];
     private int[] _refCounts = new int[32];
     private string[] _paths = new string[32];
@@ -203,7 +204,34 @@ public sealed class AssetManager : IDisposable
             }
         }
 
+        foreach (var tex in _textures.Values)
+        {
+            Raylib.UnloadTexture(tex);
+        }
+        _textures.Clear();
+
         _count = 0;
         _byPath.Clear();
+    }
+
+    public Texture2D GetTexture(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return default;
+
+        string fullPath = Path.Combine(AssetsRoot, path);
+        if (!File.Exists(fullPath))
+        {
+            fullPath = path;
+            if (!File.Exists(fullPath)) return default;
+        }
+
+        if (_textures.TryGetValue(fullPath, out var tex))
+        {
+            return tex;
+        }
+
+        var newTex = Raylib.LoadTexture(fullPath);
+        _textures[fullPath] = newTex;
+        return newTex;
     }
 }

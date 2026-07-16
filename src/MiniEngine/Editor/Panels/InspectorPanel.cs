@@ -89,6 +89,12 @@ public sealed class InspectorPanel
             ref var r = ref _renderers.Get(e);
             ImGui.Checkbox("Viditelny", ref r.Visible);
             ImGui.ColorEdit3("Barva", ref r.Tint);
+
+            string texPath = r.AlbedoTexturePath ?? "";
+            if (ImGui.InputText("Textura", ref texPath, 256))
+            {
+                r.AlbedoTexturePath = texPath;
+            }
         }
 
         ImGui.PopItemWidth();

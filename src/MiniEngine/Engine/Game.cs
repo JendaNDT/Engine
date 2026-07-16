@@ -544,7 +544,6 @@ public sealed class Game : IDisposable
         if (active) ImGui.PopStyleColor();
     }
 
-    /// <summary>Bezi uvnitr BeginMode3D. Zadne alokace, zadne LINQ.</summary>
     private void DrawSceneGeometries()
     {
         var transforms = _transforms.Span;
@@ -562,32 +561,62 @@ public sealed class Game : IDisposable
             {
                 var world = Matrix4x4.Transpose(t.World);
                 ref Model m = ref _assets.Get(r.ModelHandle);
+
+                Texture2D texOverride = default;
+                if (!string.IsNullOrEmpty(r.AlbedoTexturePath))
+                {
+                    texOverride = _assets.GetTexture(r.AlbedoTexturePath);
+                }
+
                 unsafe
                 {
                     for (int mi = 0; mi < m.MeshCount; mi++)
                     {
                         ref var mat = ref m.Materials[m.MeshMaterial[mi]];
                         Color origColor = mat.Maps[(int)MaterialMapIndex.Albedo].Color;
+                        Texture2D origTex = mat.Maps[(int)MaterialMapIndex.Albedo].Texture;
 
                         byte rVal = (byte)Math.Clamp(origColor.R * r.Tint.X, 0f, 255f);
                         byte gVal = (byte)Math.Clamp(origColor.G * r.Tint.Y, 0f, 255f);
                         byte bVal = (byte)Math.Clamp(origColor.B * r.Tint.Z, 0f, 255f);
                         mat.Maps[(int)MaterialMapIndex.Albedo].Color = new Color(rVal, gVal, bVal, origColor.A);
 
+                        if (texOverride.Id > 0)
+                        {
+                            mat.Maps[(int)MaterialMapIndex.Albedo].Texture = texOverride;
+                        }
+
                         Raylib.DrawMesh(m.Meshes[mi], mat, world);
 
                         mat.Maps[(int)MaterialMapIndex.Albedo].Color = origColor;
+                        mat.Maps[(int)MaterialMapIndex.Albedo].Texture = origTex;
                     }
                 }
             }
             else
             {
                 var color = new Color((byte)(r.Tint.X * 255), (byte)(r.Tint.Y * 255), (byte)(r.Tint.Z * 255), (byte)255);
+
+                Texture2D texOverride = default;
+                if (!string.IsNullOrEmpty(r.AlbedoTexturePath))
+                {
+                    texOverride = _assets.GetTexture(r.AlbedoTexturePath);
+                }
+
                 unsafe
                 {
                     _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Color = color;
+                    Texture2D origTex = _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Texture;
+
+                    if (texOverride.Id > 0)
+                    {
+                        _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Texture = texOverride;
+                    }
+
+                    Raylib.DrawMesh(_cubeMesh, _cubeMaterial, Matrix4x4.Transpose(t.World));
+
+                    _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Texture = origTex;
                 }
-                Raylib.DrawMesh(_cubeMesh, _cubeMaterial, Matrix4x4.Transpose(t.World));
             }
         }
     }

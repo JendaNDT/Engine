@@ -39,6 +39,7 @@ public struct MeshRenderer
     public int ModelHandle;
     public Vector3 Tint;     // 0..1, prevede se na Color az pri kresleni
     public bool Visible;
+    public string AlbedoTexturePath;
 }
 
 /// <summary>Placeholder do doby, nez pripojis BepuPhysics.</summary>
