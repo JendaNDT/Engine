@@ -11,6 +11,7 @@ namespace MiniEngine.Editor;
 public sealed class LightPanel
 {
     private readonly LightingShader _lighting;
+    private readonly PostProcessing _postProcessing;
 
     private const float DefaultAzimuth = 35f;
     private const float DefaultElevation = 57f;
@@ -18,9 +19,10 @@ public sealed class LightPanel
     private float _azimuthDeg = DefaultAzimuth;
     private float _elevationDeg = DefaultElevation;
 
-    public LightPanel(LightingShader lighting)
+    public LightPanel(LightingShader lighting, PostProcessing postProcessing)
     {
         _lighting = lighting;
+        _postProcessing = postProcessing;
         UpdateDirection();
     }
 
@@ -36,7 +38,7 @@ public sealed class LightPanel
 
     public void Draw()
     {
-        ImGui.Begin("Svetlo");
+        ImGui.Begin("Svetlo & Efekty");
         ImGui.PushItemWidth(-110f);
 
         bool dirChanged = false;
@@ -50,6 +52,18 @@ public sealed class LightPanel
         ImGui.ColorEdit3("Okolni svetlo", ref _lighting.Ambient);
         ImGui.SliderFloat("Odlesky", ref _lighting.SpecStrength, 0f, 1f, "%.2f");
 
+        ImGui.Separator();
+        ImGui.Text("Post-processing (Efekty)");
+
+        ImGui.Checkbox("Aktivovat efekty", ref _postProcessing.Enabled);
+
+        if (_postProcessing.Enabled)
+        {
+            ImGui.SliderFloat("Intenzita Bloom", ref _postProcessing.BloomIntensity, 0f, 2f, "%.2f");
+            ImGui.SliderFloat("Jasovy prah Bloom", ref _postProcessing.BloomThreshold, 0.1f, 1.0f, "%.2f");
+            ImGui.SliderFloat("Sila Vignette", ref _postProcessing.VignettePower, 0f, 1f, "%.2f");
+        }
+
         ImGui.Spacing();
         if (ImGui.Button("Vychozi"))
         {
@@ -59,6 +73,12 @@ public sealed class LightPanel
             _lighting.SunColor = LightingShader.DefaultSunColor;
             _lighting.Ambient = LightingShader.DefaultAmbient;
             _lighting.SpecStrength = LightingShader.DefaultSpecStrength;
+            
+            _postProcessing.Enabled = true;
+            _postProcessing.BloomIntensity = 0.6f;
+            _postProcessing.BloomThreshold = 0.7f;
+            _postProcessing.VignettePower = 0.3f;
+            
             UpdateDirection();
         }
 

@@ -12,8 +12,11 @@ namespace MiniEngine.Editor;
 public sealed class EditorViewport : IDisposable
 {
     private RenderTexture2D _rt;
+    private RenderTexture2D _postProcessedRt;
     private int _width = 1;
     private int _height = 1;
+
+    public Rendering.PostProcessing PostProcessor;
 
     /// <summary>true = uzivatel drzi pravou mys nad viewportem, kamera ma vyhradni kontrolu.</summary>
     public bool Captured { get; private set; }
@@ -33,6 +36,8 @@ public sealed class EditorViewport : IDisposable
         _width = 1280;
         _height = 720;
         _rt = Raylib.LoadRenderTexture(_width, _height);
+        _postProcessedRt = Raylib.LoadRenderTexture(_width, _height);
+        PostProcessor = new Rendering.PostProcessing();
     }
 
     /// <summary>Krok 1: vykresli scenu do offscreen textury. Vola se PRED BeginDrawing().</summary>
@@ -73,13 +78,32 @@ public sealed class EditorViewport : IDisposable
         if (w != _width || h != _height)
         {
             Raylib.UnloadRenderTexture(_rt);
+            Raylib.UnloadRenderTexture(_postProcessedRt);
             _rt = Raylib.LoadRenderTexture(w, h);
+            _postProcessedRt = Raylib.LoadRenderTexture(w, h);
             _width = w;
             _height = h;
         }
 
-        // ImageRenderTexture resi Y-flip (OpenGL FBO ma obracenou osu Y).
-        rlImGui.ImageRenderTexture(_rt);
+        if (PostProcessor.Enabled)
+        {
+            PostProcessor.Apply();
+            Raylib.BeginTextureMode(_postProcessedRt);
+            Raylib.BeginShaderMode(PostProcessor.Shader);
+            
+            Rectangle sourceRec = new Rectangle(0, 0, _rt.Texture.Width, -_rt.Texture.Height);
+            Rectangle destRec = new Rectangle(0, 0, _postProcessedRt.Texture.Width, _postProcessedRt.Texture.Height);
+            Raylib.DrawTexturePro(_rt.Texture, sourceRec, destRec, Vector2.Zero, 0f, Color.White);
+            
+            Raylib.EndShaderMode();
+            Raylib.EndTextureMode();
+            
+            rlImGui.ImageRenderTexture(_postProcessedRt);
+        }
+        else
+        {
+            rlImGui.ImageRenderTexture(_rt);
+        }
 
         Hovered = ImGui.IsItemHovered();
         Origin = ImGui.GetItemRectMin();
@@ -122,5 +146,10 @@ public sealed class EditorViewport : IDisposable
         return Raylib.GetScreenToWorldRayEx(local, camera, _width, _height);
     }
 
-    public void Dispose() => Raylib.UnloadRenderTexture(_rt);
+    public void Dispose()
+    {
+        Raylib.UnloadRenderTexture(_rt);
+        Raylib.UnloadRenderTexture(_postProcessedRt);
+        PostProcessor.Dispose();
+    }
 }
