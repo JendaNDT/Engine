@@ -17,6 +17,7 @@ public sealed class AssetManager : IDisposable
 
     private readonly Dictionary<string, int> _byPath = [];
     private readonly Dictionary<string, Texture2D> _textures = [];
+    private readonly Dictionary<string, Sound> _sounds = [];
     private Model[] _models = new Model[32];
     private int[] _refCounts = new int[32];
     private string[] _paths = new string[32];
@@ -210,6 +211,12 @@ public sealed class AssetManager : IDisposable
         }
         _textures.Clear();
 
+        foreach (var sound in _sounds.Values)
+        {
+            Raylib.UnloadSound(sound);
+        }
+        _sounds.Clear();
+
         _count = 0;
         _byPath.Clear();
     }
@@ -233,5 +240,26 @@ public sealed class AssetManager : IDisposable
         var newTex = Raylib.LoadTexture(fullPath);
         _textures[fullPath] = newTex;
         return newTex;
+    }
+
+    public Sound GetSound(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return default;
+
+        string fullPath = Path.Combine(AssetsRoot, path);
+        if (!File.Exists(fullPath))
+        {
+            fullPath = path;
+            if (!File.Exists(fullPath)) return default;
+        }
+
+        if (_sounds.TryGetValue(fullPath, out var sound))
+        {
+            return sound;
+        }
+
+        var newSound = Raylib.LoadSound(fullPath);
+        _sounds[fullPath] = newSound;
+        return newSound;
     }
 }

@@ -91,6 +91,28 @@ public struct ParticleEmitter
     };
 }
 
+public struct AudioSourceComponent
+{
+    public bool Active;
+    public string ClipPath;
+    public float Volume;
+    public float Pitch;
+    public bool Loop;
+    public bool Spatial3D;
+    public bool IsPlaying;
+
+    public static AudioSourceComponent Default => new()
+    {
+        Active = false,
+        ClipPath = "",
+        Volume = 1f,
+        Pitch = 1f,
+        Loop = false,
+        Spatial3D = true,
+        IsPlaying = false
+    };
+}
+
 /// <summary>
 /// Prepocet world matic. Rodic se dopocitava rekurzivne pres "stamp" pole,
 /// takze NEZALEZI na poradi v dense poli (driv musel rodic lezet pred ditetem -

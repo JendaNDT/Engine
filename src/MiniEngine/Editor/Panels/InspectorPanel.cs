@@ -16,6 +16,7 @@ public sealed class InspectorPanel
     private readonly Store<MeshRenderer> _renderers;
     private readonly Store<Name> _names;
     private readonly Store<ParticleEmitter> _emitters;
+    private readonly Store<AudioSourceComponent> _audioSources;
 
     // Euler cache plati jen pro entitu, pro kterou byla spocitana.
     private int _eulerEntity = -1;
@@ -33,6 +34,7 @@ public sealed class InspectorPanel
         _renderers = world.Store<MeshRenderer>();
         _names = world.Store<Name>();
         _emitters = world.Store<ParticleEmitter>();
+        _audioSources = world.Store<AudioSourceComponent>();
     }
 
     public void Draw(EditorSelection selection)
@@ -164,6 +166,40 @@ public sealed class InspectorPanel
             if (ImGui.Button("Přidat ParticleEmitter"))
             {
                 _emitters.Add(e, ParticleEmitter.Default);
+            }
+        }
+
+        // --- AudioSourceComponent ---
+        if (_audioSources.Has(e))
+        {
+            ImGui.Separator();
+            ImGui.Text("AudioSource");
+
+            ref var source = ref _audioSources.Get(e);
+            ImGui.Checkbox("Aktivni (Prehravat)", ref source.Active);
+
+            string pathBuf = source.ClipPath ?? "";
+            if (ImGui.InputText("Zvukovy soubor", ref pathBuf, 256))
+            {
+                source.ClipPath = pathBuf;
+            }
+
+            ImGui.SliderFloat("Hlasitost", ref source.Volume, 0f, 1f);
+            ImGui.SliderFloat("Pitch", ref source.Pitch, 0.5f, 2f);
+            ImGui.Checkbox("Smyckovat", ref source.Loop);
+            ImGui.Checkbox("Prostorovy 3D", ref source.Spatial3D);
+
+            if (ImGui.Button("Odebrat AudioSource"))
+            {
+                _audioSources.RemoveAt(e);
+            }
+        }
+        else
+        {
+            ImGui.Separator();
+            if (ImGui.Button("Přidat AudioSource"))
+            {
+                _audioSources.Add(e, AudioSourceComponent.Default);
             }
         }
 

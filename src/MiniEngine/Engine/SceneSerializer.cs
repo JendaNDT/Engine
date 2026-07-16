@@ -38,6 +38,7 @@ public sealed class EntityData
     public int Parent { get; set; } = -1;                   // pozice rodice v Entities, -1 = root
     public MeshRendererData? MeshRenderer { get; set; }
     public ParticleEmitterData? ParticleEmitter { get; set; }
+    public AudioSourceData? AudioSource { get; set; }
 }
 
 public sealed class MeshRendererData
@@ -63,6 +64,16 @@ public sealed class ParticleEmitterData
     public float[] VelocityMax { get; set; } = [0.5f, 2f, 0.5f];
 }
 
+public sealed class AudioSourceData
+{
+    public bool Active { get; set; }
+    public string? ClipPath { get; set; }
+    public float Volume { get; set; } = 1f;
+    public float Pitch { get; set; } = 1f;
+    public bool Loop { get; set; }
+    public bool Spatial3D { get; set; } = true;
+}
+
 /// <summary>
 /// Source-generated JSON kontext - POVINNE kvuli NativeAOT.
 /// Reflexni serializace by v AOT publish spadla (viz DEEP_RESEARCH 2.3).
@@ -70,12 +81,13 @@ public sealed class ParticleEmitterData
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(SceneData))]
 [JsonSerializable(typeof(ParticleEmitterData))]
+[JsonSerializable(typeof(AudioSourceData))]
 internal partial class SceneJsonContext : JsonSerializerContext { }
 
 public static class SceneSerializer
 {
     public static void Save(string path, Store<Transform> transforms, Store<MeshRenderer> renderers,
-        Store<Name> names, Store<ParticleEmitter> emitters, AssetManager assets, LightingShader lighting)
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, AssetManager assets, LightingShader lighting)
     {
         var scene = new SceneData();
         var entityIndexes = transforms.Entities;
@@ -131,6 +143,20 @@ public static class SceneSerializer
                 };
             }
 
+            if (audioSources.Has(idx))
+            {
+                ref var src = ref audioSources.Get(idx);
+                e.AudioSource = new AudioSourceData
+                {
+                    Active = src.Active,
+                    ClipPath = src.ClipPath,
+                    Volume = src.Volume,
+                    Pitch = src.Pitch,
+                    Loop = src.Loop,
+                    Spatial3D = src.Spatial3D
+                };
+            }
+
             scene.Entities.Add(e);
         }
 
@@ -147,7 +173,7 @@ public static class SceneSerializer
     }
 
     public static void Load(string path, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
-        Store<Name> names, Store<ParticleEmitter> emitters, AssetManager assets, LightingShader lighting)
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, AssetManager assets, LightingShader lighting)
     {
         var scene = JsonSerializer.Deserialize(File.ReadAllText(path), SceneJsonContext.Default.SceneData);
         if (scene is null) return;
@@ -226,6 +252,20 @@ public static class SceneSerializer
                     Gravity = new Vector3(pe.Gravity[0], pe.Gravity[1], pe.Gravity[2]),
                     VelocityMin = new Vector3(pe.VelocityMin[0], pe.VelocityMin[1], pe.VelocityMin[2]),
                     VelocityMax = new Vector3(pe.VelocityMax[0], pe.VelocityMax[1], pe.VelocityMax[2])
+                });
+            }
+
+            if (e.AudioSource is { } src)
+            {
+                audioSources.Add(idx, new AudioSourceComponent
+                {
+                    Active = src.Active,
+                    ClipPath = src.ClipPath ?? "",
+                    Volume = src.Volume,
+                    Pitch = src.Pitch,
+                    Loop = src.Loop,
+                    Spatial3D = src.Spatial3D,
+                    IsPlaying = false
                 });
             }
         }

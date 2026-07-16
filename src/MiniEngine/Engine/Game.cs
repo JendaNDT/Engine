@@ -6,6 +6,7 @@ using MiniEngine.Core;
 using MiniEngine.Editor;
 using MiniEngine.Physics;
 using MiniEngine.Rendering;
+using MiniEngine.Audio;
 using Raylib_cs;
 using rlImGui_cs;
 // Raylib_cs ma taky typ 'Transform' - bez aliasu je odkaz nejednoznacny (CS0104).
@@ -23,7 +24,9 @@ public sealed class Game : IDisposable
     private readonly Store<Name> _names;
     private readonly Store<RigidBodyRef> _bodies;
     private readonly Store<ParticleEmitter> _emitters;
+    private readonly Store<AudioSourceComponent> _audioSources;
     private readonly ParticleSystem _particleSystem = new();
+    private readonly AudioSystem _audioSystem = new();
 
     // Fyzika bezi jen kdyz je zapnuta tlacitkem. STOP = dispose celeho sveta,
     // START = novy svet postaveny z aktualnich Transformu. Zadne rucni mazani teles.
@@ -71,12 +74,14 @@ public sealed class Game : IDisposable
         _names = _world.Store<Name>();
         _bodies = _world.Store<RigidBodyRef>();
         _emitters = _world.Store<ParticleEmitter>();
+        _audioSources = _world.Store<AudioSourceComponent>();
     }
 
     public void Run()
     {
         Raylib.SetConfigFlags(ConfigFlags.ResizableWindow | ConfigFlags.Msaa4xHint | ConfigFlags.VSyncHint);
         Raylib.InitWindow(1600, 900, "MiniEngine");
+        Raylib.InitAudioDevice();
         Raylib.SetTargetFPS(0);   // VSync ridi tempo
 
         rlImGui.Setup(darkTheme: true, enableDocking: true);
@@ -223,12 +228,14 @@ public sealed class Game : IDisposable
         _lighting.Dispose();
         _viewport.Dispose();
         rlImGui.Shutdown();
+        Raylib.CloseAudioDevice();
         Raylib.CloseWindow();
     }
 
     private void Update(float dt)
     {
         _particleSystem.Update(dt, _transforms, _emitters);
+        _audioSystem.Update(_camera.Camera, _transforms, _audioSources, _assets);
 
         _assetScanTimer += dt;
         if (_assetScanTimer > 2f)
@@ -451,13 +458,14 @@ public sealed class Game : IDisposable
         _bodies.Clear();   // Transformy zustanou tam, kde tela dopadla
         _playerBody = null;
         _playerEntity = -1;
+        _audioSystem.StopAll(_audioSources, _assets);
     }
 
     private void SaveScene()
     {
         try
         {
-            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _assets, _lighting);
+            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _audioSources, _assets, _lighting);
             _hierarchy.SceneStatus = "Ulozeno: scene.json";
         }
         catch (Exception ex)
@@ -478,7 +486,7 @@ public sealed class Game : IDisposable
 
         try
         {
-            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _assets, _lighting);
+            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _audioSources, _assets, _lighting);
             _lightPanel.LoadFrom(_lighting.SunDirection);
             _selection.Clear();
             _hierarchy.SceneStatus = "Nacteno: scene.json";
