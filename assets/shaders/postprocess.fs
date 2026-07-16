@@ -9,6 +9,7 @@ uniform float bloomThreshold;
 uniform float vignettePower;
 uniform float saturation;
 uniform float contrast;
+uniform float chromaticAberration = 0.0;
 
 out vec4 finalColor;
 
@@ -25,7 +26,12 @@ vec3 ACESFilm(vec3 x)
 
 void main()
 {
-    vec4 baseColor = texture(texture0, fragTexCoord);
+    // Chromatic Aberration (radial color splitting)
+    vec2 uvOffset = (fragTexCoord - vec2(0.5)) * chromaticAberration;
+    float r = texture(texture0, fragTexCoord - uvOffset).r;
+    float g = texture(texture0, fragTexCoord).g;
+    float b = texture(texture0, fragTexCoord + uvOffset).b;
+    vec4 baseColor = vec4(r, g, b, texture(texture0, fragTexCoord).a);
     
     // 1. Box blur s jasovým filtrem pro Bloom
     vec3 glowColor = vec3(0.0);

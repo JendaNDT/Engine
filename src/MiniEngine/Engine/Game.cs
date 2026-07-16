@@ -14,6 +14,13 @@ using Transform = MiniEngine.Core.Transform;
 
 namespace MiniEngine.Engine;
 
+public enum RenderMode
+{
+    Lit,
+    Unlit,
+    Wireframe
+}
+
 public sealed class Game : IDisposable
 {
     private readonly World _world = new();
@@ -26,6 +33,9 @@ public sealed class Game : IDisposable
     private readonly Store<ParticleEmitter> _emitters;
     private readonly Store<AudioSourceComponent> _audioSources;
     private readonly Store<BehaviorComponent> _behaviors;
+    private readonly Store<TriggerComponent> _triggers;
+    private readonly Store<ActionComponent> _actions;
+    private readonly Store<LightComponent> _lights;
     private readonly ParticleSystem _particleSystem = new();
     private readonly AudioSystem _audioSystem = new();
     private readonly BehaviorSystem _behaviorSystem = new();
@@ -47,9 +57,17 @@ public sealed class Game : IDisposable
     private readonly EditorSelection _selection = new();
     private readonly TransformGizmo _gizmo = new();
     private bool _gizmoActive;   // gizmo si tento frame vzalo mys - picking nesmi bezet
+    private bool _draggingRadius;
+    private int _draggingRadiusEntity = -1;
     private HierarchyPanel _hierarchy = null!;
     private InspectorPanel _inspector = null!;
     private LightPanel _lightPanel = null!;
+    private readonly System.Collections.Generic.List<string> _undoStack = new();
+    private readonly System.Collections.Generic.List<string> _redoStack = new();
+    private bool _showGrid = true;
+    private float _gridSpacing = 1f;
+    private bool _snapEnabledVal = false;
+    private RenderMode _renderMode = RenderMode.Lit;
 
     // Delegat na DrawScene se MUSI cachovat. 'RenderScene(camera, DrawScene)'
     // by kazdy frame alokoval novy delegat (64 B/frame v hot pathu).
@@ -82,6 +100,9 @@ public sealed class Game : IDisposable
         _emitters = _world.Store<ParticleEmitter>();
         _audioSources = _world.Store<AudioSourceComponent>();
         _behaviors = _world.Store<BehaviorComponent>();
+        _triggers = _world.Store<TriggerComponent>();
+        _actions = _world.Store<ActionComponent>();
+        _lights = _world.Store<LightComponent>();
     }
 
     public void Run()
@@ -92,6 +113,7 @@ public sealed class Game : IDisposable
         Raylib.SetTargetFPS(0);   // VSync ridi tempo
 
         rlImGui.Setup(darkTheme: true, enableDocking: true);
+        MiniEngine.Editor.ImGuiTheme.ApplyDarkTheme();
         var io = ImGui.GetIO();
         io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
 
@@ -112,6 +134,7 @@ public sealed class Game : IDisposable
         _hierarchy = new HierarchyPanel(_world);
         _inspector = new InspectorPanel(_world);
         _inspector.OnFocus = FocusSelection;
+        _inspector.OnChanged = RecordHistoryState;
         _lightPanel = new LightPanel(_lighting, _viewport.PostProcessor);
         _drawSceneCached = DrawScene;
         _viewport.DrawToolbar = DrawViewportToolbar;   // jednou, ne per frame (delegat)
@@ -120,6 +143,10 @@ public sealed class Game : IDisposable
         _hierarchy.OnDuplicate = DuplicateSelected;
         _hierarchy.OnDelete = DeleteSelected;
         _hierarchy.OnReparent = ReparentEntity;
+        _hierarchy.OnChanged = RecordHistoryState;
+        _hierarchy.OnCreateEmpty = CreateEmptyEntity;
+        _hierarchy.OnCreateChildOf = CreateChildOf;
+        _hierarchy.OnSavePrefab = SaveSelectedPrefab;
 
         _assets.OnAssetChanged = (path) =>
         {
@@ -133,21 +160,25 @@ public sealed class Game : IDisposable
                     }
                     _cubeMaterial.Shader = _lighting.Shader;
                     _hierarchy.SceneStatus = "Shader uspesne hot-reloaded!";
+                    ToastSystem.Show("Shader úspěšně hot-reloaded!");
                 }
                 else
                 {
                     _hierarchy.SceneStatus = "Chyba reloadu shaderu (GLSL syntax error?)";
+                    ToastSystem.Show("Chyba reloadu shaderu (GLSL syntax error?)", 4f);
                 }
             }
             else
             {
                 _hierarchy.SceneStatus = $"Model hot-reloaded: {Path.GetFileName(path)}";
+                ToastSystem.Show($"Model hot-reloaded: {Path.GetFileName(path)}");
             }
         };
 
         RefreshAssetFiles();
         CreateDemoScene();
         TryLoadTestModel();   // az PO InitWindow - LoadModel nahrava na GPU
+        RecordHistoryState();
 
         while (!Raylib.WindowShouldClose())
         {
@@ -216,6 +247,16 @@ public sealed class Game : IDisposable
                 SpawnModelAssetAt(_viewport.DroppedModelPath, _viewport.DroppedPosition);
                 _viewport.DroppedModelPath = null;
             }
+            if (_viewport.DroppedTexturePath != null)
+            {
+                ApplyTextureAtMouse(_viewport.DroppedTexturePath);
+                _viewport.DroppedTexturePath = null;
+            }
+            if (_viewport.DroppedPrefabPath != null)
+            {
+                SpawnPrefabAt(_viewport.DroppedPrefabPath, _viewport.DroppedPrefabPosition);
+                _viewport.DroppedPrefabPath = null;
+            }
             HandleGizmo();     // PRED pickingem - klik na sipku nesmi zmenit vyber
 
             NextWindowRect(new Vector2(wp.X + leftW, wp.Y + ws.Y * 0.70f), new Vector2(ws.X - leftW - rightW, ws.Y * 0.30f));
@@ -236,6 +277,8 @@ public sealed class Game : IDisposable
 
             NextWindowRect(new Vector2(wp.X, wp.Y + ws.Y * 0.58f), new Vector2(leftW, ws.Y * 0.42f));
             _profiler.Draw();
+
+            MiniEngine.Editor.ToastSystem.UpdateAndDraw(dt);
 
             rlImGui.End();
 
@@ -258,6 +301,7 @@ public sealed class Game : IDisposable
         _behaviorSystem.Update(dt, _transforms, _behaviors, _bodies, _physics);
         _particleSystem.Update(dt, _transforms, _emitters);
         _audioSystem.Update(_camera.Camera, _transforms, _audioSources, _assets);
+        UpdateTriggers();
 
         _assetScanTimer += dt;
         if (_assetScanTimer > 2f)
@@ -311,6 +355,8 @@ public sealed class Game : IDisposable
 
             if (Raylib.IsKeyPressed(KeyboardKey.F)) FocusSelection();
             if (cmdCtrl && Raylib.IsKeyPressed(KeyboardKey.D)) DuplicateSelected();
+            if (cmdCtrl && Raylib.IsKeyPressed(KeyboardKey.Z)) Undo();
+            if (cmdCtrl && Raylib.IsKeyPressed(KeyboardKey.Y)) Redo();
 
             // Rezim gizma jako v Unity/Unreal (W/E/R, pokud se nerozhlizime kamerou)
             if (!_viewport.Captured && !_altLooking)
@@ -318,6 +364,7 @@ public sealed class Game : IDisposable
                 if (Raylib.IsKeyPressed(KeyboardKey.W)) _gizmo.SetMode(GizmoMode.Translate);
                 if (Raylib.IsKeyPressed(KeyboardKey.E)) _gizmo.SetMode(GizmoMode.Rotate);
                 if (Raylib.IsKeyPressed(KeyboardKey.R)) _gizmo.SetMode(GizmoMode.Scale);
+                if (Raylib.IsKeyPressed(KeyboardKey.L)) _gizmo.LocalSpace = !_gizmo.LocalSpace;
             }
             else
             {
@@ -494,12 +541,14 @@ public sealed class Game : IDisposable
     {
         try
         {
-            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _assets, _lighting);
+            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor);
             _hierarchy.SceneStatus = "Ulozeno: scene.json";
+            ToastSystem.Show("Scéna uložena: scene.json");
         }
         catch (Exception ex)
         {
             _hierarchy.SceneStatus = $"Chyba ukladani: {ex.Message}";
+            ToastSystem.Show($"Chyba ukládání: {ex.Message}", 4f);
         }
     }
 
@@ -508,6 +557,7 @@ public sealed class Game : IDisposable
         if (!File.Exists(ScenePath))
         {
             _hierarchy.SceneStatus = "scene.json neexistuje - nejdriv uloz";
+            ToastSystem.Show("Soubor scene.json neexistuje!", 4f);
             return;
         }
 
@@ -515,14 +565,16 @@ public sealed class Game : IDisposable
 
         try
         {
-            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _assets, _lighting);
+            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor);
             _lightPanel.LoadFrom(_lighting.SunDirection);
             _selection.Clear();
             _hierarchy.SceneStatus = "Nacteno: scene.json";
+            ToastSystem.Show("Scéna načtena: scene.json");
         }
         catch (Exception ex)
         {
             _hierarchy.SceneStatus = $"Chyba nacitani: {ex.Message}";
+            ToastSystem.Show($"Chyba načítání: {ex.Message}", 4f);
         }
     }
 
@@ -542,10 +594,13 @@ public sealed class Game : IDisposable
     {
         if (!TransformHierarchy.Reparent(_transforms, child, newParent))
             _hierarchy.SceneStatus = "Prevesit nejde (cyklus nebo neplatny cil)";
+        else
+            RecordHistoryState();
     }
 
     private void DrawViewportToolbar()
     {
+        // Levá část: Transformace a přichytávání
         GizmoModeButton("Posun (W)", GizmoMode.Translate);
         ImGui.SameLine();
         GizmoModeButton("Rotace (E)", GizmoMode.Rotate);
@@ -556,13 +611,92 @@ public sealed class Game : IDisposable
         ImGui.TextDisabled("|");
         ImGui.SameLine();
 
+        string spaceLabel = _gizmo.LocalSpace ? "Lokální" : "Globální";
+        if (ImGui.Button(spaceLabel))
+        {
+            _gizmo.LocalSpace = !_gizmo.LocalSpace;
+        }
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("|");
+        ImGui.SameLine();
+
+        ImGui.Checkbox("Přichytávat", ref _snapEnabledVal);
+        _gizmo.SnapEnabled = _snapEnabledVal;
+
+        ImGui.SameLine();
+        ImGui.PushItemWidth(65f);
+        string[] snapSteps = ["0.1", "0.25", "0.5", "1.0", "2.0"];
+        float[] snapVals = [0.1f, 0.25f, 0.5f, 1.0f, 2.0f];
+        int currentSnapIdx = Array.IndexOf(snapVals, _gizmo.SnapMoveStep);
+        if (currentSnapIdx < 0) currentSnapIdx = 2;
+        if (ImGui.Combo("##SnapCombo", ref currentSnapIdx, snapSteps, snapSteps.Length))
+        {
+            _gizmo.SnapMoveStep = snapVals[currentSnapIdx];
+            _gizmo.SnapRotateStepDeg = currentSnapIdx switch
+            {
+                0 => 5f,
+                1 => 10f,
+                2 => 15f,
+                3 => 30f,
+                _ => 45f
+            };
+            _gizmo.SnapScaleStep = currentSnapIdx switch
+            {
+                0 => 0.05f,
+                1 => 0.1f,
+                2 => 0.25f,
+                3 => 0.5f,
+                _ => 1.0f
+            };
+        }
+        ImGui.PopItemWidth();
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("|");
+        ImGui.SameLine();
+
+        ImGui.Checkbox("Mřížka", ref _showGrid);
+
+        ImGui.SameLine();
+        ImGui.PushItemWidth(60f);
+        string[] gridSteps = ["0.5", "1.0", "2.0", "5.0"];
+        float[] gridVals = [0.5f, 1.0f, 2.0f, 5.0f];
+        int currentGridIdx = Array.IndexOf(gridVals, _gridSpacing);
+        if (currentGridIdx < 0) currentGridIdx = 1;
+        if (ImGui.Combo("##GridSpacing", ref currentGridIdx, gridSteps, gridSteps.Length))
+        {
+            _gridSpacing = gridVals[currentGridIdx];
+        }
+        ImGui.PopItemWidth();
+
+        // Pravá část: Režim vykreslování, Fyzika, Kamera
+        ImGui.SameLine();
+        ImGui.TextDisabled("|");
+        ImGui.SameLine();
+
+        ImGui.PushItemWidth(90f);
+        string[] renderModes = ["Lit (Stínovaný)", "Unlit (Bez světel)", "Drátěný"];
+        int currentMode = (int)_renderMode;
+        if (ImGui.Combo("##RenderMode", ref currentMode, renderModes, renderModes.Length))
+        {
+            _renderMode = (RenderMode)currentMode;
+        }
+        ImGui.PopItemWidth();
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("|");
+        ImGui.SameLine();
+
         if (_physics is null)
         {
-            if (ImGui.Button("Fyzika: START")) StartPhysics();
+            if (ImGui.Button("Spustit fyziku")) StartPhysics();
         }
         else
         {
-            if (ImGui.Button("Fyzika: STOP")) StopPhysics();
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.75f, 0.24f, 0.24f, 1f));
+            if (ImGui.Button("Zastavit fyziku")) StopPhysics();
+            ImGui.PopStyleColor();
         }
 
         ImGui.SameLine();
@@ -570,11 +704,8 @@ public sealed class Game : IDisposable
             _camera.Reset();
 
         ImGui.SameLine();
-        if (ImGui.Button("Na výběr (F)"))
+        if (ImGui.Button("Fokus (F)"))
             FocusSelection();
-
-        ImGui.SameLine();
-        ImGui.TextDisabled("W/E/R = režim gizma | F = fokus | WASD = let kamery (Shift rychleji) | Alt+tažení = rozhlížení | kolečko = zoom | klik = výběr | Cmd+D = duplikát");
     }
 
     /// <summary>Tlacitko rezimu gizma - aktivni rezim je zvyraznene.</summary>
@@ -591,6 +722,12 @@ public sealed class Game : IDisposable
         var transforms = _transforms.Span;
         var renderers = _renderers.Span;
         var entities = _renderers.Entities;
+
+        Shader currentShader = (_renderMode == RenderMode.Lit) ? _lighting.Shader : default;
+        if (_renderMode == RenderMode.Wireframe)
+        {
+            Rlgl.EnableWireMode();
+        }
 
         for (int i = 0; i < renderers.Length; i++)
         {
@@ -615,8 +752,13 @@ public sealed class Game : IDisposable
                     for (int mi = 0; mi < m.MeshCount; mi++)
                     {
                         ref var mat = ref m.Materials[m.MeshMaterial[mi]];
+                        Shader origShader = mat.Shader;
+                        mat.Shader = currentShader;
+
                         Color origColor = mat.Maps[(int)MaterialMapIndex.Albedo].Color;
                         Texture2D origTex = mat.Maps[(int)MaterialMapIndex.Albedo].Texture;
+                        Texture2D origNormal = mat.Maps[(int)MaterialMapIndex.Normal].Texture;
+                        Texture2D origRoughness = mat.Maps[(int)MaterialMapIndex.Roughness].Texture;
 
                         byte rVal = (byte)Math.Clamp(origColor.R * r.Tint.X, 0f, 255f);
                         byte gVal = (byte)Math.Clamp(origColor.G * r.Tint.Y, 0f, 255f);
@@ -628,10 +770,43 @@ public sealed class Game : IDisposable
                             mat.Maps[(int)MaterialMapIndex.Albedo].Texture = texOverride;
                         }
 
+                        // Normal map
+                        bool hasNormal = !string.IsNullOrEmpty(r.NormalMapPath);
+                        if (hasNormal)
+                        {
+                            var normTex = _assets.GetTexture(r.NormalMapPath);
+                            if (normTex.Id > 0)
+                            {
+                                mat.Maps[(int)MaterialMapIndex.Normal].Texture = normTex;
+                            }
+                            else hasNormal = false;
+                        }
+                        Raylib.SetShaderValue(_lighting.Shader, _lighting.LocHasNormalMap, hasNormal ? 1 : 0, ShaderUniformDataType.Int);
+
+                        // Metallic/Roughness map
+                        bool hasMR = !string.IsNullOrEmpty(r.MetallicRoughnessMapPath);
+                        if (hasMR)
+                        {
+                            var mrTex = _assets.GetTexture(r.MetallicRoughnessMapPath);
+                            if (mrTex.Id > 0)
+                            {
+                                mat.Maps[(int)MaterialMapIndex.Roughness].Texture = mrTex;
+                            }
+                            else hasMR = false;
+                        }
+                        Raylib.SetShaderValue(_lighting.Shader, _lighting.LocHasMetallicRoughnessMap, hasMR ? 1 : 0, ShaderUniformDataType.Int);
+
+                        // Factors
+                        Raylib.SetShaderValue(_lighting.Shader, _lighting.LocMetallicFactor, r.MetallicFactor, ShaderUniformDataType.Float);
+                        Raylib.SetShaderValue(_lighting.Shader, _lighting.LocRoughnessFactor, r.RoughnessFactor, ShaderUniformDataType.Float);
+
                         Raylib.DrawMesh(m.Meshes[mi], mat, world);
 
+                        mat.Shader = origShader;
                         mat.Maps[(int)MaterialMapIndex.Albedo].Color = origColor;
                         mat.Maps[(int)MaterialMapIndex.Albedo].Texture = origTex;
+                        mat.Maps[(int)MaterialMapIndex.Normal].Texture = origNormal;
+                        mat.Maps[(int)MaterialMapIndex.Roughness].Texture = origRoughness;
                     }
                 }
             }
@@ -649,17 +824,52 @@ public sealed class Game : IDisposable
                 {
                     _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Color = color;
                     Texture2D origTex = _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Texture;
+                    Texture2D origNormal = _cubeMaterial.Maps[(int)MaterialMapIndex.Normal].Texture;
+                    Texture2D origRoughness = _cubeMaterial.Maps[(int)MaterialMapIndex.Roughness].Texture;
 
                     if (texOverride.Id > 0)
                     {
                         _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Texture = texOverride;
                     }
 
+                    // Normal map
+                    bool hasNormal = !string.IsNullOrEmpty(r.NormalMapPath);
+                    if (hasNormal)
+                    {
+                        var normTex = _assets.GetTexture(r.NormalMapPath);
+                        if (normTex.Id > 0)
+                            _cubeMaterial.Maps[(int)MaterialMapIndex.Normal].Texture = normTex;
+                        else hasNormal = false;
+                    }
+                    Raylib.SetShaderValue(_lighting.Shader, _lighting.LocHasNormalMap, hasNormal ? 1 : 0, ShaderUniformDataType.Int);
+
+                    // Metallic/Roughness map
+                    bool hasMR = !string.IsNullOrEmpty(r.MetallicRoughnessMapPath);
+                    if (hasMR)
+                    {
+                        var mrTex = _assets.GetTexture(r.MetallicRoughnessMapPath);
+                        if (mrTex.Id > 0)
+                            _cubeMaterial.Maps[(int)MaterialMapIndex.Roughness].Texture = mrTex;
+                        else hasMR = false;
+                    }
+                    Raylib.SetShaderValue(_lighting.Shader, _lighting.LocHasMetallicRoughnessMap, hasMR ? 1 : 0, ShaderUniformDataType.Int);
+
+                    Raylib.SetShaderValue(_lighting.Shader, _lighting.LocMetallicFactor, r.MetallicFactor, ShaderUniformDataType.Float);
+                    Raylib.SetShaderValue(_lighting.Shader, _lighting.LocRoughnessFactor, r.RoughnessFactor, ShaderUniformDataType.Float);
+
+                    _cubeMaterial.Shader = currentShader;
                     Raylib.DrawMesh(_cubeMesh, _cubeMaterial, Matrix4x4.Transpose(t.World));
 
                     _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Texture = origTex;
+                    _cubeMaterial.Maps[(int)MaterialMapIndex.Normal].Texture = origNormal;
+                    _cubeMaterial.Maps[(int)MaterialMapIndex.Roughness].Texture = origRoughness;
                 }
             }
+        }
+
+        if (_renderMode == RenderMode.Wireframe)
+        {
+            Rlgl.DisableWireMode();
         }
     }
 
@@ -669,11 +879,110 @@ public sealed class Game : IDisposable
 
         _lighting.Apply(camera);   // viewPos + parametry slunce do shaderu
 
-        Raylib.DrawGrid(40, 1f);
+        if (_showGrid && _gridSpacing > 0f)
+        {
+            Raylib.DrawGrid((int)(40f / _gridSpacing), _gridSpacing);
+        }
 
         DrawSceneGeometries();
 
-        _particleSystem.Draw();
+        _particleSystem.Draw(camera, _assets);
+
+        // Vizuální 3D helpery v editoru (pouze když fyzika neběží)
+        if (_physics is null)
+        {
+            var transformsSpan = _transforms.Span;
+            var trEntities = _transforms.Entities;
+            for (int i = 0; i < transformsSpan.Length; i++)
+            {
+                int idx = trEntities[i];
+                var center = transformsSpan[i].World.Translation;
+                
+                // Pokud nemá viditelný renderer, nakreslíme drátěný pomocný tvar
+                bool hasRenderer = _renderers.Has(idx) && _renderers.Get(idx).Visible;
+                
+                if (!hasRenderer)
+                {
+                    bool hasAudio = _audioSources.Has(idx);
+                    bool hasEmitter = _emitters.Has(idx);
+                    bool hasLight = _lights.Has(idx);
+                    bool isEmpty = !_renderers.Has(idx); // prázdný objekt (složka)
+                    
+                    if (hasAudio)
+                    {
+                        // Reprezentuje reproduktor: zelená kostička s kuželem
+                        Raylib.DrawCubeWires(center, 0.25f, 0.25f, 0.25f, Color.Lime);
+                        Raylib.DrawCylinderWires(center, 0f, 0.2f, 0.3f, 8, Color.Lime);
+                    }
+                    else if (hasEmitter)
+                    {
+                        // Reprezentuje emitor: oranžový kužel/válec ukazující směr gravitace/emise
+                        Raylib.DrawCylinderWires(center, 0.1f, 0.2f, 0.4f, 8, Color.Orange);
+                        Raylib.DrawCubeWires(center, 0.15f, 0.15f, 0.15f, Color.Orange);
+                    }
+                    else if (hasLight)
+                    {
+                        // Reprezentuje světlo: žlutá kulička s paprsky
+                        Raylib.DrawSphereWires(center, 0.2f, 8, 8, Color.Yellow);
+                        for (int k = 0; k < 8; k++)
+                        {
+                            float angle = k * MathF.PI / 4f;
+                            Vector3 dir = new Vector3(MathF.Cos(angle), 0f, MathF.Sin(angle));
+                            Raylib.DrawLine3D(center + dir * 0.2f, center + dir * 0.4f, Color.Yellow);
+                        }
+                    }
+                    else if (isEmpty)
+                    {
+                        // Reprezentuje prázdný objekt: šedá kulička a 3D kříž
+                        Raylib.DrawSphereWires(center, 0.15f, 8, 8, Color.Gray);
+                        Raylib.DrawLine3D(center - Vector3.UnitX * 0.25f, center + Vector3.UnitX * 0.25f, Color.Gray);
+                        Raylib.DrawLine3D(center - Vector3.UnitY * 0.25f, center + Vector3.UnitY * 0.25f, Color.Gray);
+                        Raylib.DrawLine3D(center - Vector3.UnitZ * 0.25f, center + Vector3.UnitZ * 0.25f, Color.Gray);
+                    }
+                }
+
+                if (_triggers.Has(idx))
+                {
+                    var trigger = _triggers.Get(idx);
+                    if (trigger.Active)
+                    {
+                        Raylib.DrawCubeWiresV(center, trigger.Size, Color.Green);
+                    }
+                }
+
+                if (_lights.Has(idx))
+                {
+                    var light = _lights.Get(idx);
+                    if (light.Active)
+                    {
+                        // Kreslíme slabou žlutou kouli představující dosah světla
+                        Raylib.DrawSphereWires(center, light.Radius, 8, 8, new Color(255, 235, 150, 40));
+
+                        // Pokud je entita vybraná, vykreslíme i interaktivní gizmo táhlo pro změnu poloměru
+                        if (idx == _selection.EntityIndex)
+                        {
+                            Vector3 handlePos = center + Vector3.UnitX * light.Radius;
+                            Ray mouseRay = _viewport.GetPickRay(camera);
+                            bool handleHovered = Raylib.GetRayCollisionSphere(mouseRay, handlePos, 0.25f).Hit;
+                            Color handleCol = _draggingRadius ? Color.Red : (handleHovered ? Color.Yellow : Color.Gold);
+
+                            // Kreslíme spojovací čáru od středu k táhlu
+                            Raylib.DrawLine3D(center, handlePos, Color.Gold);
+
+                            // Kreslíme samotné táhlo (krychlička)
+                            Raylib.DrawCube(handlePos, 0.15f, 0.15f, 0.15f, handleCol);
+                            Raylib.DrawCubeWires(handlePos, 0.15f, 0.15f, 0.15f, Color.Black);
+                        }
+                    }
+                }
+                
+                // Zvýraznění drátěného obrysu pro vybrané nevizuální entity
+                if (idx == _selection.EntityIndex && !hasRenderer)
+                {
+                    Raylib.DrawSphereWires(center, 0.35f, 10, 10, Color.Yellow);
+                }
+            }
+        }
 
         // Kresleni obrysu (wires) pro vybrane objekty
         var renderers = _renderers.Span;
@@ -714,14 +1023,61 @@ public sealed class Game : IDisposable
         if (_physics is not null || !_selection.HasSelection || !_transforms.Has(_selection.EntityIndex))
         {
             _gizmo.CancelDrag();
+            _draggingRadius = false;
             return;
         }
 
         bool altDown = Raylib.IsKeyDown(KeyboardKey.LeftAlt) || Raylib.IsKeyDown(KeyboardKey.RightAlt);
         bool canStartDrag = _viewport.Hovered && !_viewport.Captured && !_altLooking && !altDown;
 
-        _gizmoActive = _gizmo.UpdateInteraction(_transforms, _selection.EntityIndex,
+        // Fáze 12: Interakce s light radius handlem
+        int selIdx = _selection.EntityIndex;
+        if (_lights.Has(selIdx))
+        {
+            ref var light = ref _lights.Get(selIdx);
+            Vector3 center = _transforms.Get(selIdx).World.Translation;
+            Vector3 handlePos = center + Vector3.UnitX * light.Radius;
+            Ray mouseRay = _viewport.GetPickRay(_camera.Camera);
+            bool handleHovered = Raylib.GetRayCollisionSphere(mouseRay, handlePos, 0.25f).Hit;
+
+            if (_draggingRadius)
+            {
+                if (Raylib.IsMouseButtonDown(MouseButton.Left))
+                {
+                    _gizmoActive = true;
+                    // Výpočet nového poloměru
+                    float t = Vector3.Dot(center - mouseRay.Position, mouseRay.Direction);
+                    Vector3 closest = mouseRay.Position + mouseRay.Direction * t;
+                    light.Radius = MathF.Max(0.1f, Vector3.Distance(center, closest));
+                }
+                else
+                {
+                    _draggingRadius = false;
+                    RecordHistoryState();
+                }
+            }
+            else if (handleHovered && canStartDrag && Raylib.IsMouseButtonPressed(MouseButton.Left))
+            {
+                _draggingRadius = true;
+                _draggingRadiusEntity = selIdx;
+                _gizmoActive = true;
+            }
+
+            if (_draggingRadius || handleHovered)
+            {
+                _gizmoActive = true;
+            }
+        }
+
+        bool wasDragging = _gizmo.Dragging;
+
+        _gizmoActive |= _gizmo.UpdateInteraction(_transforms, _selection.EntityIndex,
             _viewport.GetPickRay(_camera.Camera), _camera.Camera, canStartDrag);
+
+        if (wasDragging && !_gizmo.Dragging)
+        {
+            RecordHistoryState();
+        }
 
         // Rotace gizmem meni kvaternion mimo Inspector - jeho euler cache by jinak
         // ukazovala stare hodnoty, dokud neprepnes vyber (znamy bug ze statusu).
@@ -799,6 +1155,7 @@ public sealed class Game : IDisposable
 
         // Vybereme novou kopii korene
         _selection.EntityIndex = oldToNew[rootSrc].Index;
+        RecordHistoryState();
     }
 
     /// <summary>
@@ -830,26 +1187,12 @@ public sealed class Game : IDisposable
         _world.Destroy(_world.EntityFromIndex(idx));
         _selection.Clear();
         _gizmo.CancelDrag();
+        RecordHistoryState();
     }
 
     /// <summary>
-    /// Vyber entity klikem do viewportu. Paprsek z mysi se testuje proti vsem
-    /// viditelnym entitam, nejblizsi zasah vyhrava. Klik do prazdna = odznacit.
-    /// U placeholder krychli staci AABB (BoundingBox), u modelu presny test
-    /// proti trojuhelnikum (GetRayCollisionMesh) - klik na diru donutu neproleze.
-    /// </summary>
-    private void HandlePicking()
+    private int PickEntity(Ray ray)
     {
-        if (_gizmoActive || _gizmo.Dragging) return;   // tazeni/chyceni sipky neni vyber
-        if (!_viewport.Hovered || _viewport.Captured) return;
-        if (!Raylib.IsMouseButtonPressed(MouseButton.Left)) return;
-
-        // Alt+klik je zacatek rozhlizeni, ne vyber.
-        if (_altLooking) return;
-        if (Raylib.IsKeyDown(KeyboardKey.LeftAlt) || Raylib.IsKeyDown(KeyboardKey.RightAlt)) return;
-
-        Ray ray = _viewport.GetPickRay(_camera.Camera);
-
         float best = float.MaxValue;
         int bestEntity = -1;
 
@@ -883,8 +1226,7 @@ public sealed class Game : IDisposable
             }
             else
             {
-                // AABB kolem krychle z WORLD pozy (dite ma v Position lokalni souradnice).
-                // Rotaci ignoruje - pro placeholder OK.
+                // AABB kolem krychle z WORLD pozy.
                 var half = TransformHierarchy.WorldScale(t.World) * 0.5f;
                 var center = t.World.Translation;
                 hit = Raylib.GetRayCollisionBox(ray, new BoundingBox(center - half, center + half));
@@ -897,7 +1239,155 @@ public sealed class Game : IDisposable
             }
         }
 
-        _selection.EntityIndex = bestEntity;
+        // Billboard/Helper picking pro entity bez viditelného mesh rendereru
+        var transformsSpan = _transforms.Span;
+        var trEntities = _transforms.Entities;
+        for (int i = 0; i < transformsSpan.Length; i++)
+        {
+            int idx = trEntities[i];
+            bool hasRenderer = _renderers.Has(idx) && _renderers.Get(idx).Visible;
+            if (!hasRenderer)
+            {
+                bool hasAudio = _audioSources.Has(idx);
+                bool hasEmitter = _emitters.Has(idx);
+                bool isEmpty = !_renderers.Has(idx); // prázdný objekt
+
+                if (hasAudio || hasEmitter || isEmpty)
+                {
+                    var center = transformsSpan[i].World.Translation;
+                    // Test kolize s malou koulí na pozici helperu
+                    var hit = Raylib.GetRayCollisionSphere(ray, center, 0.25f);
+                    if (hit.Hit && hit.Distance < best)
+                    {
+                        best = hit.Distance;
+                        bestEntity = idx;
+                    }
+                }
+            }
+        }
+
+        return bestEntity;
+    }
+
+    private void ApplyTextureAtMouse(string relPath)
+    {
+        Ray ray = _viewport.GetPickRay(_camera.Camera);
+        int hitEntity = PickEntity(ray);
+        if (hitEntity >= 0)
+        {
+            if (!_renderers.Has(hitEntity))
+            {
+                _renderers.Add(hitEntity, new MeshRenderer
+                {
+                    ModelHandle = -1,
+                    Tint = new Vector3(0.8f, 0.8f, 0.8f),
+                    Visible = true,
+                    AlbedoTexturePath = relPath
+                });
+            }
+            else
+            {
+                ref var r = ref _renderers.Get(hitEntity);
+                r.AlbedoTexturePath = relPath;
+            }
+            RecordHistoryState();
+        }
+    }
+
+    private void CreateEmptyEntity()
+    {
+        var e = _world.Create();
+        var t = Transform.Identity;
+        Vector3 camForward = Vector3.Normalize(_camera.Camera.Target - _camera.Camera.Position);
+        t.Position = _camera.Camera.Position + camForward * 4f;
+        _world.Add(e, t);
+        _world.Add(e, new Name { Value = $"Prázdný {e.Index}" });
+        _selection.EntityIndex = e.Index;
+        RecordHistoryState();
+    }
+
+    private void CreateChildOf(int parentIdx)
+    {
+        var e = _world.Create();
+        var t = Transform.Identity;
+        t.Parent = parentIdx;
+        _world.Add(e, t);
+        _world.Add(e, new Name { Value = $"Prázdný {e.Index}" });
+        _selection.EntityIndex = e.Index;
+        RecordHistoryState();
+    }
+
+    private void RecordHistoryState()
+    {
+        if (_physics is not null) return;
+
+        var data = SceneSerializer.CreateSceneData(_transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor);
+        var json = System.Text.Json.JsonSerializer.Serialize(data, SceneJsonContext.Default.SceneData);
+
+        if (_undoStack.Count > 0 && _undoStack[^1] == json) return;
+
+        _undoStack.Add(json);
+        if (_undoStack.Count > 30)
+            _undoStack.RemoveAt(0);
+
+        _redoStack.Clear();
+    }
+
+    private void Undo()
+    {
+        if (_undoStack.Count <= 1) return;
+
+        var current = _undoStack[^1];
+        _undoStack.RemoveAt(_undoStack.Count - 1);
+        _redoStack.Add(current);
+
+        var targetJson = _undoStack[^1];
+        var data = System.Text.Json.JsonSerializer.Deserialize(targetJson, SceneJsonContext.Default.SceneData);
+        if (data is not null)
+        {
+            SceneSerializer.ApplySceneData(data, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor);
+            _selection.Clear();
+            _gizmo.CancelDrag();
+            _hierarchy.SceneStatus = "Undo provedeno";
+            ToastSystem.Show("Zpět (Undo)");
+        }
+    }
+
+    private void Redo()
+    {
+        if (_redoStack.Count == 0) return;
+
+        var targetJson = _redoStack[^1];
+        _redoStack.RemoveAt(_redoStack.Count - 1);
+        _undoStack.Add(targetJson);
+
+        var data = System.Text.Json.JsonSerializer.Deserialize(targetJson, SceneJsonContext.Default.SceneData);
+        if (data is not null)
+        {
+            SceneSerializer.ApplySceneData(data, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor);
+            _selection.Clear();
+            _gizmo.CancelDrag();
+            _hierarchy.SceneStatus = "Redo provedeno";
+            ToastSystem.Show("Znovu (Redo)");
+        }
+    }
+
+    /// <summary>
+    /// Vyber entity klikem do viewportu. Paprsek z mysi se testuje proti vsem
+    /// viditelnym entitam, nejblizsi zasah vyhrava. Klik do prazdna = odznacit.
+    /// </summary>
+    private void HandlePicking()
+    {
+        if (_gizmoActive || _gizmo.Dragging) return;   // tazeni/chyceni sipky neni vyber
+        if (!_viewport.Hovered || _viewport.Captured) return;
+        if (!Raylib.IsMouseButtonPressed(MouseButton.Left)) return;
+
+        // Alt+klik je zacatek rozhlizeni, ne vyber.
+        if (_altLooking) return;
+        if (Raylib.IsKeyDown(KeyboardKey.LeftAlt) || Raylib.IsKeyDown(KeyboardKey.RightAlt)) return;
+
+        Ray ray = _viewport.GetPickRay(_camera.Camera);
+        _selection.EntityIndex = PickEntity(ray);
     }
 
     private static void NextWindowRect(Vector2 pos, Vector2 size)
@@ -996,7 +1486,7 @@ public sealed class Game : IDisposable
                 string ext = Path.GetExtension(file).ToLower();
                 if (ext == ".glb" || ext == ".gltf" || ext == ".vs" || ext == ".fs" ||
                     ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga" ||
-                    ext == ".wav" || ext == ".ogg" || ext == ".mp3")
+                    ext == ".wav" || ext == ".ogg" || ext == ".mp3" || file.EndsWith(".prefab.json", StringComparison.OrdinalIgnoreCase))
                 {
                     _assetFiles.Add(rel);
                 }
@@ -1021,6 +1511,7 @@ public sealed class Game : IDisposable
             
             _selection.EntityIndex = e.Index;
             _hierarchy.SceneStatus = $"Model přetažen a spawnut: {Path.GetFileName(relPath)}";
+            RecordHistoryState();
         }
         catch (Exception ex)
         {
@@ -1047,10 +1538,185 @@ public sealed class Game : IDisposable
             
             _selection.EntityIndex = e.Index;
             _hierarchy.SceneStatus = $"Načten a spawnut model: {Path.GetFileName(relPath)}";
+            RecordHistoryState();
         }
         catch (Exception ex)
         {
             _hierarchy.SceneStatus = $"Chyba spawnu: {ex.Message}";
+        }
+    }
+
+    private void SpawnPrefabAt(string relPath, Vector3 worldPos)
+    {
+        try
+        {
+            string fullPath = Path.Combine(AppContext.BaseDirectory, "assets", relPath);
+            var json = File.ReadAllText(fullPath);
+            var prefabData = System.Text.Json.JsonSerializer.Deserialize(json, SceneJsonContext.Default.SceneData);
+            if (prefabData != null)
+            {
+                int newRoot = SceneSerializer.ApplyPrefabData(prefabData, worldPos, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets);
+                _selection.EntityIndex = newRoot;
+                _hierarchy.SceneStatus = $"Prefab přetažen a spawnut: {Path.GetFileName(relPath)}";
+                RecordHistoryState();
+            }
+        }
+        catch (Exception ex)
+        {
+            _hierarchy.SceneStatus = $"Chyba přetažení prefabu: {ex.Message}";
+        }
+    }
+
+    private void SpawnPrefab(string relPath)
+    {
+        try
+        {
+            string fullPath = Path.Combine(AppContext.BaseDirectory, "assets", relPath);
+            var json = File.ReadAllText(fullPath);
+            var prefabData = System.Text.Json.JsonSerializer.Deserialize(json, SceneJsonContext.Default.SceneData);
+            if (prefabData != null)
+            {
+                Vector3 camForward = Vector3.Normalize(_camera.Camera.Target - _camera.Camera.Position);
+                Vector3 spawnPos = _camera.Camera.Position + camForward * 4f;
+                int newRoot = SceneSerializer.ApplyPrefabData(prefabData, spawnPos, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets);
+                _selection.EntityIndex = newRoot;
+                _hierarchy.SceneStatus = $"Načten a spawnut prefab: {Path.GetFileName(relPath)}";
+                RecordHistoryState();
+            }
+        }
+        catch (Exception ex)
+        {
+            _hierarchy.SceneStatus = $"Chyba spawnu prefabu: {ex.Message}";
+        }
+    }
+
+    private void SaveSelectedPrefab()
+    {
+        if (!_selection.HasSelection || !_transforms.Has(_selection.EntityIndex)) return;
+
+        int rootIdx = _selection.EntityIndex;
+        string entName = _names.Has(rootIdx) ? _names.Get(rootIdx).Value : $"Entity_{rootIdx}";
+
+        foreach (char c in Path.GetInvalidFileNameChars())
+        {
+            entName = entName.Replace(c, '_');
+        }
+        entName = entName.Replace(' ', '_');
+
+        string prefabsDir = Path.Combine(AppContext.BaseDirectory, "assets", "prefabs");
+        if (!Directory.Exists(prefabsDir)) Directory.CreateDirectory(prefabsDir);
+
+        string filename = $"{entName}.prefab.json";
+        string fullPath = Path.Combine(prefabsDir, filename);
+
+        try
+        {
+            var prefabData = SceneSerializer.CreatePrefabData(rootIdx, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets);
+            var json = System.Text.Json.JsonSerializer.Serialize(prefabData, SceneJsonContext.Default.SceneData);
+            File.WriteAllText(fullPath, json);
+            _hierarchy.SceneStatus = $"Prefab uložen: prefabs/{filename}";
+            RefreshAssetFiles();
+        }
+        catch (Exception ex)
+        {
+            _hierarchy.SceneStatus = $"Chyba uložení prefabu: {ex.Message}";
+        }
+    }
+
+    private void UpdateTriggers()
+    {
+        var triggersSpan = _triggers.Span;
+        var triggerEntities = _triggers.Entities;
+        Vector3 camPos = _camera.Camera.Position;
+
+        for (int i = 0; i < triggersSpan.Length; i++)
+        {
+            ref var trigger = ref triggersSpan[i];
+            if (!trigger.Active) continue;
+
+            int triggerEnt = triggerEntities[i];
+            if (!_transforms.Has(triggerEnt)) continue;
+
+            Vector3 triggerPos = _transforms.Get(triggerEnt).World.Translation;
+            Vector3 min = triggerPos - trigger.Size * 0.5f;
+            Vector3 max = triggerPos + trigger.Size * 0.5f;
+
+            // Kontrola kamery
+            bool isCameraInside =
+                camPos.X >= min.X && camPos.X <= max.X &&
+                camPos.Y >= min.Y && camPos.Y <= max.Y &&
+                camPos.Z >= min.Z && camPos.Z <= max.Z;
+
+            // Kontrola ostatních objektů ve scéně
+            bool isAnyOtherEntityInside = false;
+            var transformsSpan = _transforms.Span;
+            var transformEntities = _transforms.Entities;
+            for (int j = 0; j < transformsSpan.Length; j++)
+            {
+                int otherEnt = transformEntities[j];
+                if (otherEnt == triggerEnt) continue;
+
+                // Nepočítat přímé děti/rodiče triggeru, abychom se netriggerovali sami
+                if (_transforms.Get(otherEnt).Parent == triggerEnt || _transforms.Get(triggerEnt).Parent == otherEnt)
+                    continue;
+
+                Vector3 otherPos = transformsSpan[j].World.Translation;
+                if (otherPos.X >= min.X && otherPos.X <= max.X &&
+                    otherPos.Y >= min.Y && otherPos.Y <= max.Y &&
+                    otherPos.Z >= min.Z && otherPos.Z <= max.Z)
+                {
+                    isAnyOtherEntityInside = true;
+                    break;
+                }
+            }
+
+            bool currentlyTriggered = isCameraInside || isAnyOtherEntityInside;
+            if (currentlyTriggered && !trigger.WasTriggered)
+            {
+                // Vstup do zóny -> Vyvolat akci
+                if (trigger.TargetEntity >= 0 && _actions.Has(trigger.TargetEntity))
+                {
+                    ref var action = ref _actions.Get(trigger.TargetEntity);
+                    if (action.Active)
+                    {
+                        ExecuteAction(trigger.TargetEntity, ref action);
+                    }
+                }
+            }
+            trigger.WasTriggered = currentlyTriggered;
+        }
+    }
+
+    private void ExecuteAction(int targetEntity, ref ActionComponent action)
+    {
+        if (action.ActionType == 0) // Spustit zvuk
+        {
+            if (_audioSources.Has(targetEntity))
+            {
+                ref var src = ref _audioSources.Get(targetEntity);
+                src.Active = true;
+            }
+            else if (!string.IsNullOrEmpty(action.ActionParam))
+            {
+                var sound = _assets.GetSound(action.ActionParam);
+                Raylib.PlaySound(sound);
+            }
+        }
+        else if (action.ActionType == 1) // Přepnout částice
+        {
+            if (_emitters.Has(targetEntity))
+            {
+                ref var em = ref _emitters.Get(targetEntity);
+                em.Active = !em.Active;
+            }
+        }
+        else if (action.ActionType == 2) // Přepnout viditelnost
+        {
+            if (_renderers.Has(targetEntity))
+            {
+                ref var rend = ref _renderers.Get(targetEntity);
+                rend.Visible = !rend.Visible;
+            }
         }
     }
 
@@ -1060,65 +1726,136 @@ public sealed class Game : IDisposable
 
         if (ImGui.Button("Obnovit")) RefreshAssetFiles();
         ImGui.SameLine();
-        ImGui.TextDisabled("Kliknutím na model (.glb) jej spawneš do scény.");
+        ImGui.TextDisabled("Kliknutím na model/prefab jej spawneš. Táhnutím ho přetáhneš do scény.");
 
         ImGui.InputText("Hledat", ref _assetSearchQuery, 128);
 
-        string[] filters = ["Vše", "Modely (*.glb/*.gltf)", "Textury (*.png/*.jpg...)", "Zvuky (*.wav/*.ogg...)", "Shadery (*.vs/*.fs)"];
+        string[] filters = ["Vše", "Modely (*.glb/*.gltf)", "Textury (*.png/*.jpg...)", "Zvuky (*.wav/*.ogg...)", "Shadery (*.vs/*.fs)", "Prefaby (*.prefab.json)"];
         ImGui.Combo("Filtr typů", ref _assetFilterType, filters, filters.Length);
 
         ImGui.Separator();
 
         if (ImGui.BeginChild("FilesList"))
         {
-            foreach (var relPath in _assetFiles)
+            float panelWidth = ImGui.GetContentRegionAvail().X;
+            int columns = Math.Max(1, (int)(panelWidth / 115f));
+
+            if (ImGui.BeginTable("AssetBrowserTable", columns))
             {
-                string ext = Path.GetExtension(relPath).ToLower();
-                
-                if (!string.IsNullOrEmpty(_assetSearchQuery) && relPath.IndexOf(_assetSearchQuery, StringComparison.OrdinalIgnoreCase) < 0)
+                foreach (var relPath in _assetFiles)
                 {
-                    continue;
-                }
+                    string ext = Path.GetExtension(relPath).ToLower();
+                    
+                    if (!string.IsNullOrEmpty(_assetSearchQuery) && relPath.IndexOf(_assetSearchQuery, StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        continue;
+                    }
 
-                bool matchesFilter = _assetFilterType switch
-                {
-                    0 => true,
-                    1 => ext == ".glb" || ext == ".gltf",
-                    2 => ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga",
-                    3 => ext == ".wav" || ext == ".ogg" || ext == ".mp3",
-                    4 => ext == ".vs" || ext == ".fs",
-                    _ => true
-                };
+                    bool matchesFilter = _assetFilterType switch
+                    {
+                        0 => true,
+                        1 => ext == ".glb" || ext == ".gltf",
+                        2 => ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga",
+                        3 => ext == ".wav" || ext == ".ogg" || ext == ".mp3",
+                        4 => ext == ".vs" || ext == ".fs",
+                        5 => relPath.EndsWith(".prefab.json", StringComparison.OrdinalIgnoreCase),
+                        _ => true
+                    };
 
-                if (!matchesFilter) continue;
+                    if (!matchesFilter) continue;
 
-                string icon = "📄";
-                if (ext == ".glb" || ext == ".gltf") icon = "📦";
-                else if (ext == ".vs" || ext == ".fs") icon = "⚙️";
-                else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga") icon = "🖼️";
-                else if (ext == ".wav" || ext == ".ogg" || ext == ".mp3") icon = "🎵";
+                    ImGui.TableNextColumn();
+                    ImGui.PushID(relPath);
 
-                if (ImGui.Button($"{icon} {relPath}"))
-                {
+                    string icon = "📄";
+                    Vector4 color = new Vector4(0.5f, 0.5f, 0.5f, 1f); // default gray
+
                     if (ext == ".glb" || ext == ".gltf")
                     {
-                        SpawnModelAsset(relPath);
+                        icon = "📦";
+                        color = new Vector4(0.24f, 0.42f, 0.75f, 1f); // Blue
                     }
-                }
-
-                if (ext == ".glb" || ext == ".gltf")
-                {
-                    if (ImGui.BeginDragDropSource())
+                    else if (ext == ".vs" || ext == ".fs")
                     {
-                        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(relPath);
-                        fixed (byte* p = bytes)
-                        {
-                            ImGui.SetDragDropPayload("ASSET_MODEL_PATH", (IntPtr)p, (uint)bytes.Length);
-                        }
-                        ImGui.Text($"Táhnutí modelu: {Path.GetFileName(relPath)}");
-                        ImGui.EndDragDropSource();
+                        icon = "⚙️";
+                        color = new Vector4(0.4f, 0.4f, 0.45f, 1f); // Gray
                     }
+                    else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")
+                    {
+                        icon = "🖼️";
+                        color = new Vector4(0.24f, 0.70f, 0.42f, 1f); // Green
+                    }
+                    else if (ext == ".wav" || ext == ".ogg" || ext == ".mp3")
+                    {
+                        icon = "🎵";
+                        color = new Vector4(0.6f, 0.3f, 0.8f, 1f); // Purple
+                    }
+                    else if (relPath.EndsWith(".prefab.json", StringComparison.OrdinalIgnoreCase))
+                    {
+                        icon = "🧩";
+                        color = new Vector4(0.85f, 0.5f, 0.2f, 1f); // Orange
+                    }
+
+                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(color.X, color.Y, color.Z, 0.15f));
+                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(color.X, color.Y, color.Z, 0.30f));
+                    ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(color.X, color.Y, color.Z, 0.50f));
+                    ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 4f);
+
+                    string filename = Path.GetFileName(relPath);
+                    string displayLabel = filename;
+                    if (displayLabel.Length > 12) displayLabel = displayLabel.Substring(0, 10) + "..";
+
+                    ImGui.BeginGroup();
+                    if (ImGui.Button($"{icon}\n{displayLabel}", new Vector2(100f, 75f)))
+                    {
+                        if (ext == ".glb" || ext == ".gltf")
+                        {
+                            SpawnModelAsset(relPath);
+                        }
+                        else if (relPath.EndsWith(".prefab.json", StringComparison.OrdinalIgnoreCase))
+                        {
+                            SpawnPrefab(relPath);
+                        }
+                    }
+
+                    bool isModel = ext == ".glb" || ext == ".gltf";
+                    bool isTexture = ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga";
+                    bool isAudio = ext == ".wav" || ext == ".ogg" || ext == ".mp3";
+                    bool isPrefab = relPath.EndsWith(".prefab.json", StringComparison.OrdinalIgnoreCase);
+
+                    if (isModel || isTexture || isAudio || isPrefab)
+                    {
+                        if (ImGui.BeginDragDropSource())
+                        {
+                            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(relPath);
+                            fixed (byte* p = bytes)
+                            {
+                                string payloadName = isModel ? "ASSET_MODEL_PATH" : 
+                                                     (isTexture ? "ASSET_TEXTURE_PATH" : 
+                                                     (isAudio ? "ASSET_AUDIO_PATH" : "ASSET_PREFAB_PATH"));
+                                ImGui.SetDragDropPayload(payloadName, (IntPtr)p, (uint)bytes.Length);
+                            }
+                            ImGui.Text($"Táhnutí: {filename}");
+                            ImGui.EndDragDropSource();
+                        }
+                    }
+                    ImGui.EndGroup();
+
+                    ImGui.PopStyleVar();
+                    ImGui.PopStyleColor(3);
+
+                    if (ImGui.IsItemHovered())
+                    {
+                        ImGui.BeginTooltip();
+                        ImGui.Text($"Název: {filename}");
+                        ImGui.Text($"Typ: {ext.ToUpper()}");
+                        ImGui.Text($"Cesta: assets/{relPath}");
+                        ImGui.EndTooltip();
+                    }
+
+                    ImGui.PopID();
                 }
+                ImGui.EndTable();
             }
             ImGui.EndChild();
         }

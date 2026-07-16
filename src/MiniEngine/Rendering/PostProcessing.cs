@@ -12,12 +12,14 @@ public sealed class PostProcessing : System.IDisposable
     public float VignettePower = 0.3f;
     public float Saturation = 1.0f;
     public float Contrast = 1.0f;
+    public float ChromaticAberration = 0.0f;
 
     private readonly int _locBloomIntensity;
     private readonly int _locBloomThreshold;
     private readonly int _locVignettePower;
     private readonly int _locSaturation;
     private readonly int _locContrast;
+    private readonly int _locChromaticAberration;
 
     public PostProcessing()
     {
@@ -31,6 +33,7 @@ public sealed class PostProcessing : System.IDisposable
         _locVignettePower = Raylib.GetShaderLocation(Shader, "vignettePower");
         _locSaturation = Raylib.GetShaderLocation(Shader, "saturation");
         _locContrast = Raylib.GetShaderLocation(Shader, "contrast");
+        _locChromaticAberration = Raylib.GetShaderLocation(Shader, "chromaticAberration");
     }
 
     public void Apply()
@@ -40,6 +43,7 @@ public sealed class PostProcessing : System.IDisposable
         Raylib.SetShaderValue(Shader, _locVignettePower, VignettePower, ShaderUniformDataType.Float);
         Raylib.SetShaderValue(Shader, _locSaturation, Saturation, ShaderUniformDataType.Float);
         Raylib.SetShaderValue(Shader, _locContrast, Contrast, ShaderUniformDataType.Float);
+        Raylib.SetShaderValue(Shader, _locChromaticAberration, ChromaticAberration, ShaderUniformDataType.Float);
     }
 
     public void Dispose()

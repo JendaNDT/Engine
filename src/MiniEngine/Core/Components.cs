@@ -40,6 +40,10 @@ public struct MeshRenderer
     public Vector3 Tint;     // 0..1, prevede se na Color az pri kresleni
     public bool Visible;
     public string AlbedoTexturePath;
+    public string NormalMapPath;
+    public string MetallicRoughnessMapPath;
+    public float MetallicFactor;
+    public float RoughnessFactor;
 }
 
 /// <summary>Placeholder do doby, nez pripojis BepuPhysics.</summary>
@@ -68,11 +72,13 @@ public struct ParticleEmitter
     public Vector3 ColorStart;
     public Vector3 ColorEnd;
     public float SizeStart;
+    public float SizeMiddle;
     public float SizeEnd;
     public float Lifetime;
     public Vector3 Gravity;
     public Vector3 VelocityMin;
     public Vector3 VelocityMax;
+    public string TexturePath;
 
     public static ParticleEmitter Default => new()
     {
@@ -83,11 +89,13 @@ public struct ParticleEmitter
         ColorStart = new Vector3(1.0f, 0.5f, 0.1f),
         ColorEnd = new Vector3(0.2f, 0.2f, 0.2f),
         SizeStart = 0.2f,
+        SizeMiddle = 0.1f,
         SizeEnd = 0.05f,
         Lifetime = 1.5f,
         Gravity = new Vector3(0f, 1f, 0f),
         VelocityMin = new Vector3(-0.5f, 1f, -0.5f),
-        VelocityMax = new Vector3(0.5f, 2f, 0.5f)
+        VelocityMax = new Vector3(0.5f, 2f, 0.5f),
+        TexturePath = ""
     };
 }
 
@@ -194,4 +202,52 @@ public sealed class TransformSystem
 
         _stamp[entityIndex] = _frame;
     }
+}
+
+public struct TriggerComponent
+{
+    public bool Active;
+    public Vector3 Size;
+    public int TargetEntity; // Entity s ActionComponent
+    public bool WasTriggered; // Pomocny stav pro zjisteni vstupu/vystupu cile
+
+    public static TriggerComponent Default => new()
+    {
+        Active = false,
+        Size = new Vector3(1f, 1f, 1f),
+        TargetEntity = -1,
+        WasTriggered = false
+    };
+}
+
+public struct ActionComponent
+{
+    public bool Active;
+    public int ActionType; // 0 = PlaySound, 1 = EmitParticles, 2 = ToggleVisibility
+    public string ActionParam; // Cesta ke zvuku / ID emitoru / atd.
+    public bool TriggeredState; // Pri zmene na true se provede akce
+
+    public static ActionComponent Default => new()
+    {
+        Active = false,
+        ActionType = 0,
+        ActionParam = "",
+        TriggeredState = false
+    };
+}
+
+public struct LightComponent
+{
+    public bool Active;
+    public Vector3 Color;
+    public float Radius;
+    public float Intensity;
+
+    public static LightComponent Default => new()
+    {
+        Active = true,
+        Color = new Vector3(1.0f, 0.9f, 0.7f),
+        Radius = 5f,
+        Intensity = 1f
+    };
 }

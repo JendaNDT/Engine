@@ -9,9 +9,9 @@ namespace MiniEngine.Editor;
 public enum GizmoMode { Translate, Rotate, Scale }
 
 /// <summary>
-/// Transform gizmo se tremi rezimy (prepinani klavesami 1/2/3 nebo tlacitky v toolbaru):
-///  - Posun:    sipky po WORLD osach (X cervena, Y zelena, Z modra)
-///  - Rotace:   kruznice kolem WORLD os, tazeni po kruznici = otaceni
+/// Transform gizmo se tremi rezimy (prepinani klavesami W/E/R nebo tlacitky v toolbaru):
+///  - Posun:    sipky po WORLD nebo LOCAL osach (X cervena, Y zelena, Z modra)
+///  - Rotace:   kruznice kolem WORLD nebo LOCAL os, tazeni po kruznici = otaceni
 ///  - Meritko:  osy ve WORLD orientaci objektu (u ditete vcetne rotace rodicu;
 ///              scale se aplikuje na lokalni Scale) + stredova koule = uniformni scale
 ///
@@ -26,8 +26,8 @@ public enum GizmoMode { Translate, Rotate, Scale }
 ///     s vypnutym depth testem, aby nezmizelo uvnitr objektu.
 ///
 /// Ctrl/Cmd pri tazeni = prichytavani (posun 0.5 jednotky, rotace 15 stupnu, meritko krok 0.25).
-/// Tazeni se latchne do pusteni tlacitka, i kdyz kurzor vyjede z viewportu.
-/// Zadne alokace za frame (staticka pole, jen structy) - Stats panel musi dal hlasit 0 B.
+/// Tazeni se latchne do pusteni tlacitka, i kvuli vyjeti z viewportu.
+/// Zadne alokace za frame (staticka pole, jen structy) - Stats panel stale hlasi 0 B.
 /// </summary>
 public sealed class TransformGizmo
 {
@@ -50,6 +50,15 @@ public sealed class TransformGizmo
 
     /// <summary>Prave probiha tazeni.</summary>
     public bool Dragging => _dragAxis >= 0;
+
+    /// <summary>Přepínač pro lokální transformace (World vs Local souřadnice).</summary>
+    public bool LocalSpace { get; set; } = false;
+
+    /// <summary>Přichytávání k mřížce zapnuto.</summary>
+    public bool SnapEnabled { get; set; } = false;
+    public float SnapMoveStep { get; set; } = 0.5f;
+    public float SnapRotateStepDeg { get; set; } = 15f;
+    public float SnapScaleStep { get; set; } = 0.25f;
 
     private int _dragAxis = -1;
 
@@ -80,6 +89,16 @@ public sealed class TransformGizmo
         HoverAxis = -1;
     }
 
+    /// <summary>Vrátí orientovanou osu (lokální nebo globální) podle nastavení LocalSpace.</summary>
+    private Vector3 GetAxisVector(Store<Transform> transforms, int entityIndex, int axis)
+    {
+        if (LocalSpace && entityIndex >= 0 && transforms.Has(entityIndex))
+        {
+            return WorldAxis(transforms, entityIndex, axis);
+        }
+        return Axes[axis];
+    }
+
     /// <summary>
     /// Zpracuje mys nad gizmem podle aktivniho rezimu.
     /// </summary>
@@ -103,16 +122,17 @@ public sealed class TransformGizmo
         {
             if (Raylib.IsMouseButtonDown(MouseButton.Left))
             {
-                float param = ClosestAxisParam(_dragStartPos, Axes[_dragAxis], ray, _grabT);
-                var p = _dragStartPos + Axes[_dragAxis] * (param - _grabT);
-
-                if (SnapKeyDown())
+                var axisVec = GetAxisVector(transforms, entityIndex, _dragAxis);
+                float param = ClosestAxisParam(_dragStartPos, axisVec, ray, _grabT);
+                
+                float delta = param - _grabT;
+                bool snap = SnapEnabled ^ SnapKeyDown();
+                if (snap && SnapMoveStep > 0f)
                 {
-                    p.X = MathF.Round(p.X * 2f) * 0.5f;
-                    p.Y = MathF.Round(p.Y * 2f) * 0.5f;
-                    p.Z = MathF.Round(p.Z * 2f) * 0.5f;
+                    delta = MathF.Round(delta / SnapMoveStep) * SnapMoveStep;
                 }
 
+                var p = _dragStartPos + axisVec * delta;
                 TransformHierarchy.SetWorldPosition(transforms, entityIndex, p);
             }
             else
@@ -123,21 +143,22 @@ public sealed class TransformGizmo
             return true;
         }
 
-        HoverAxis = canStartDrag ? PickArrow(worldPos, ray, camera) : -1;
+        HoverAxis = canStartDrag ? PickArrow(transforms, entityIndex, worldPos, ray, camera) : -1;
 
         if (HoverAxis >= 0 && Raylib.IsMouseButtonPressed(MouseButton.Left))
         {
             _dragAxis = HoverAxis;
             _dragStartPos = worldPos;
-            _grabT = ClosestAxisParam(worldPos, Axes[_dragAxis], ray, 0f);
+            var axisVec = GetAxisVector(transforms, entityIndex, _dragAxis);
+            _grabT = ClosestAxisParam(worldPos, axisVec, ray, 0f);
             return true;
         }
 
         return false;
     }
 
-    /// <summary>Sipky posunu jsou world-aligned, takze staci AABB kolem kazde z nich.</summary>
-    private static int PickArrow(Vector3 position, Ray ray, Camera3D camera)
+    /// <summary>Sipky posunu, v lokálním prostoru respektují natočení.</summary>
+    private int PickArrow(Store<Transform> transforms, int entityIndex, Vector3 position, Ray ray, Camera3D camera)
     {
         float s = GizmoScale(position, camera);
         var pad = new Vector3(0.14f * s);
@@ -147,8 +168,9 @@ public sealed class TransformGizmo
 
         for (int a = 0; a < 3; a++)
         {
-            var from = position + Axes[a] * (0.15f * s);
-            var to = position + Axes[a] * (1.15f * s);
+            var dir = GetAxisVector(transforms, entityIndex, a);
+            var from = position + dir * (0.15f * s);
+            var to = position + dir * (1.15f * s);
 
             var hit = Raylib.GetRayCollisionBox(ray,
                 new BoundingBox(Vector3.Min(from, to) - pad, Vector3.Max(from, to) + pad));
@@ -175,24 +197,21 @@ public sealed class TransformGizmo
         {
             if (Raylib.IsMouseButtonDown(MouseButton.Left))
             {
-                // Prusecik paprsku s rovinou kruznice; kdyz je pohled skoro v rovine,
-                // uhel se ten frame proste nezmeni (zadne poskoceni).
-                if (PlaneHitDir(worldPos, Axes[_dragAxis], ray, out var dir))
+                var axisVec = GetAxisVector(transforms, entityIndex, _dragAxis);
+                if (PlaneHitDir(worldPos, axisVec, ray, out var dir))
                 {
                     _dragCurrentDir = dir;
-                    float angle = SignedAngle(_grabDir, dir, Axes[_dragAxis]);
+                    float angle = SignedAngle(_grabDir, dir, axisVec);
 
-                    if (SnapKeyDown())
+                    bool snap = SnapEnabled ^ SnapKeyDown();
+                    if (snap && SnapRotateStepDeg > 0f)
                     {
-                        const float step = 15f * MathF.PI / 180f;
-                        angle = MathF.Round(angle / step) * step;
+                        float stepRad = SnapRotateStepDeg * MathF.PI / 180f;
+                        angle = MathF.Round(angle / stepRad) * stepRad;
                     }
 
-                    // World-space delta = delta * start. POZOR na konvenci: u KVATERNIONU
-                    // v System.Numerics 'a * b' aplikuje NEJDRIV b, pak a (overeno testem
-                    // 16. 7. 2026) - je to PRESNE NAOPAK nez u Matrix4x4 (tam 'a * b' = napred a).
                     var worldRot = Quaternion.Normalize(
-                        Quaternion.CreateFromAxisAngle(Axes[_dragAxis], angle) * _dragStartRot);
+                        Quaternion.CreateFromAxisAngle(axisVec, angle) * _dragStartRot);
                     TransformHierarchy.SetWorldRotation(transforms, entityIndex, worldRot);
                 }
             }
@@ -204,33 +223,37 @@ public sealed class TransformGizmo
             return true;
         }
 
-        HoverAxis = canStartDrag ? PickRing(worldPos, radius, ray) : -1;
+        HoverAxis = canStartDrag ? PickRing(transforms, entityIndex, worldPos, radius, ray) : -1;
 
-        if (HoverAxis >= 0 && Raylib.IsMouseButtonPressed(MouseButton.Left) &&
-            PlaneHitDir(worldPos, Axes[HoverAxis], ray, out var grab))
+        if (HoverAxis >= 0 && Raylib.IsMouseButtonPressed(MouseButton.Left))
         {
-            _dragAxis = HoverAxis;
-            _dragStartRot = TransformHierarchy.WorldRotation(transforms, entityIndex);
-            _grabDir = grab;
-            _dragCurrentDir = grab;
-            return true;
+            var axisVec = GetAxisVector(transforms, entityIndex, HoverAxis);
+            if (PlaneHitDir(worldPos, axisVec, ray, out var grab))
+            {
+                _dragAxis = HoverAxis;
+                _dragStartRot = TransformHierarchy.WorldRotation(transforms, entityIndex);
+                _grabDir = grab;
+                _dragCurrentDir = grab;
+                return true;
+            }
         }
 
         return false;
     }
 
-    /// <summary>Kruznice pod kurzorem: prusecik s rovinou + vzdalenost od stredu blizko polomeru.</summary>
-    private static int PickRing(Vector3 center, float radius, Ray ray)
+    /// <summary>Kruznice pod kurzorem (lokální či globální).</summary>
+    private int PickRing(Store<Transform> transforms, int entityIndex, Vector3 center, float radius, Ray ray)
     {
         int best = -1;
         float bestRayT = float.MaxValue;
 
         for (int a = 0; a < 3; a++)
         {
-            float denom = Vector3.Dot(ray.Direction, Axes[a]);
-            if (MathF.Abs(denom) < 1e-4f) continue;   // rovina hranou ke kamere - netrefitelna
+            var axisVec = GetAxisVector(transforms, entityIndex, a);
+            float denom = Vector3.Dot(ray.Direction, axisVec);
+            if (MathF.Abs(denom) < 1e-4f) continue;
 
-            float rayT = Vector3.Dot(center - ray.Position, Axes[a]) / denom;
+            float rayT = Vector3.Dot(center - ray.Position, axisVec) / denom;
             if (rayT <= 0f || rayT >= bestRayT) continue;
 
             float fromCenter = (ray.Position + ray.Direction * rayT - center).Length();
@@ -296,8 +319,9 @@ public sealed class TransformGizmo
                     factor = MathF.Abs(_grabT) > 1e-4f ? param / _grabT : 1f;
                 }
 
-                if (SnapKeyDown())
-                    factor = MathF.Max(0.25f, MathF.Round(factor * 4f) * 0.25f);
+                bool snap = SnapEnabled ^ SnapKeyDown();
+                if (snap && SnapScaleStep > 0f)
+                    factor = MathF.Max(0.01f, MathF.Round(factor / SnapScaleStep) * SnapScaleStep);
 
                 factor = Math.Clamp(factor, 0.01f, 100f);
 
@@ -388,8 +412,8 @@ public sealed class TransformGizmo
 
         switch (Mode)
         {
-            case GizmoMode.Translate: DrawTranslate(worldPos, s); break;
-            case GizmoMode.Rotate: DrawRotate(worldPos, camera); break;
+            case GizmoMode.Translate: DrawTranslate(transforms, entityIndex, worldPos, s); break;
+            case GizmoMode.Rotate: DrawRotate(transforms, entityIndex, worldPos, camera); break;
             default: DrawScale(transforms, entityIndex, worldPos, s); break;
         }
 
@@ -397,18 +421,18 @@ public sealed class TransformGizmo
         Rlgl.EnableDepthTest();
     }
 
-    private void DrawTranslate(Vector3 position, float s)
+    private void DrawTranslate(Store<Transform> transforms, int entityIndex, Vector3 position, float s)
     {
         if (Dragging)
         {
             // Vodici primka pres celou scenu - je videt, po cem se jede.
-            var d = Axes[_dragAxis];
+            var d = GetAxisVector(transforms, entityIndex, _dragAxis);
             Raylib.DrawLine3D(position - d * 500f, position + d * 500f, AxisColors[_dragAxis]);
         }
 
         for (int a = 0; a < 3; a++)
         {
-            var dir = Axes[a];
+            var dir = GetAxisVector(transforms, entityIndex, a);
             var color = HandleColor(a);
 
             var tail = position + dir * (0.15f * s);   // stred nechavame volny (prekryv os)
@@ -420,26 +444,32 @@ public sealed class TransformGizmo
         }
     }
 
-    private void DrawRotate(Vector3 position, Camera3D camera)
+    private void DrawRotate(Store<Transform> transforms, int entityIndex, Vector3 position, Camera3D camera)
     {
         float radius = RingRadius(position, camera);
 
-        // DrawCircle3D kresli kruznici v rovine XY, pak ji otoci kolem osy o uhel.
-        // X kruznice (rovina YZ): otocit kolem Y o 90. Y kruznice (rovina XZ): kolem X o 90.
         for (int a = 0; a < 3; a++)
         {
             var color = HandleColor(a);
-            var (rotAxis, angleDeg) = a switch
-            {
-                0 => (Vector3.UnitY, 90f),
-                1 => (Vector3.UnitX, 90f),
-                _ => (Vector3.UnitY, 0f),
-            };
+            var normal = GetAxisVector(transforms, entityIndex, a);
 
-            // Tri soustredne kruznice = "tlustsi" cara, at je na trackpadu videt, co chytas.
-            Raylib.DrawCircle3D(position, radius, rotAxis, angleDeg, color);
-            Raylib.DrawCircle3D(position, radius * 0.985f, rotAxis, angleDeg, color);
-            Raylib.DrawCircle3D(position, radius * 1.015f, rotAxis, angleDeg, color);
+            // Procedural drawing of local/world circle perpendicular to normal vector
+            Vector3 u = Vector3.Normalize(Vector3.Cross(normal, MathF.Abs(normal.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitZ));
+            Vector3 v = Vector3.Normalize(Vector3.Cross(normal, u));
+
+            // Nested rings for thickness (feels much better on trackpad)
+            float[] radii = [radius, radius * 0.985f, radius * 1.015f];
+            foreach (var r in radii)
+            {
+                Vector3 prevPoint = position + u * r;
+                for (int i = 1; i <= 36; i++)
+                {
+                    float theta = i * 10f * MathF.PI / 180f;
+                    Vector3 currPoint = position + (u * MathF.Cos(theta) + v * MathF.Sin(theta)) * r;
+                    Raylib.DrawLine3D(prevPoint, currPoint, color);
+                    prevPoint = currPoint;
+                }
+            }
         }
 
         if (Dragging)

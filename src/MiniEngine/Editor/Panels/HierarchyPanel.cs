@@ -20,6 +20,10 @@ public sealed class HierarchyPanel
     private readonly Store<Name> _names;
     private readonly Random _rng = new();
 
+    private string _searchQuery = "";
+    private bool _forceExpandAll;
+    private bool _forceCollapseAll;
+
     // Strom se stavi kazdy frame znovu (poradi/rodice se mohli zmenit).
     private readonly Dictionary<int, List<int>> _children = [];
     private readonly List<int> _roots = [];
@@ -39,6 +43,15 @@ public sealed class HierarchyPanel
 
     /// <summary>Prevaseni entity (child, newParent; -1 = koren) - logika v Game.</summary>
     public Action<int, int>? OnReparent;
+    public Action? OnChanged;
+    public Action? OnCreateEmpty;
+    public Action<int>? OnCreateChildOf;
+    public Action? OnSavePrefab;
+
+    private int _renamingEntity = -1;
+    private string _renameBuffer = "";
+    private bool _justStartedRename = false;
+    private int _pendingCreateChildOf = -2;
 
     /// <summary>Zprava o poslednim ulozeni/nacteni (nebo chybe) - nastavuje Game.</summary>
     public string SceneStatus = "";
@@ -59,6 +72,12 @@ public sealed class HierarchyPanel
         {
             var e = CreateCube();
             selection.EntityIndex = e.Index;
+            OnChanged?.Invoke();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("+ Prázdný"))
+        {
+            OnCreateEmpty?.Invoke();
         }
 
         if (selection.HasSelection && _transforms.Has(selection.EntityIndex))
@@ -68,6 +87,9 @@ public sealed class HierarchyPanel
 
             ImGui.SameLine();
             if (ImGui.Button("Smazat")) OnDelete?.Invoke();
+
+            ImGui.SameLine();
+            if (ImGui.Button("Uložit Prefab")) OnSavePrefab?.Invoke();
         }
 
         if (ImGui.Button("Ulozit scenu")) OnSave?.Invoke();
@@ -76,6 +98,14 @@ public sealed class HierarchyPanel
 
         if (SceneStatus.Length > 0)
             ImGui.TextDisabled(SceneStatus);
+
+        ImGui.Separator();
+
+        // Vyhledávání a hromadné rozbalení/sbalení
+        ImGui.InputText("Hledat", ref _searchQuery, 64);
+        if (ImGui.Button("Rozbalit vše")) _forceExpandAll = true;
+        ImGui.SameLine();
+        if (ImGui.Button("Sbalit vše")) _forceCollapseAll = true;
 
         ImGui.Separator();
 
@@ -103,6 +133,15 @@ public sealed class HierarchyPanel
 
         if (_pendingReparent.Child != -2)
             OnReparent?.Invoke(_pendingReparent.Child, _pendingReparent.NewParent);
+
+        if (_pendingCreateChildOf != -2)
+        {
+            OnCreateChildOf?.Invoke(_pendingCreateChildOf);
+            _pendingCreateChildOf = -2;
+        }
+
+        _forceExpandAll = false;
+        _forceCollapseAll = false;
 
         ImGui.End();
     }
@@ -133,6 +172,8 @@ public sealed class HierarchyPanel
 
     private void DrawNode(int idx, EditorSelection selection)
     {
+        if (!NodeOrDescendantsMatch(idx, _searchQuery)) return;
+
         bool hasKids = _children.TryGetValue(idx, out var kids) && kids.Count > 0;
 
         var flags = ImGuiTreeNodeFlags.OpenOnArrow |
@@ -142,12 +183,87 @@ public sealed class HierarchyPanel
         if (!hasKids) flags |= ImGuiTreeNodeFlags.Leaf;
         if (idx == selection.EntityIndex) flags |= ImGuiTreeNodeFlags.Selected;
 
-        string name = _names.Has(idx) ? _names.Get(idx).Value : $"Entity {idx}";
-        bool open = ImGui.TreeNodeEx($"{name}##{idx}", flags);
+        if (_forceExpandAll)
+        {
+            ImGui.SetNextItemOpen(true, ImGuiCond.Always);
+        }
+        else if (_forceCollapseAll)
+        {
+            ImGui.SetNextItemOpen(false, ImGuiCond.Always);
+        }
 
-        // Klik na sipku rozbaluje, klik na jmeno vybira.
-        if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && !ImGui.IsItemToggledOpen())
-            _clicked = idx;
+        string name = _names.Has(idx) ? _names.Get(idx).Value : $"Entity {idx}";
+        bool open = false;
+
+        if (idx == _renamingEntity)
+        {
+            ImGui.PushItemWidth(-1f);
+            string buf = _renameBuffer;
+            if (ImGui.InputText($"##Rename{idx}", ref buf, 64, ImGuiInputTextFlags.EnterReturnsTrue))
+            {
+                if (_names.Has(idx))
+                {
+                    ref var n = ref _names.Get(idx);
+                    n.Value = buf;
+                }
+                _renamingEntity = -1;
+                OnChanged?.Invoke();
+            }
+            else
+            {
+                _renameBuffer = buf;
+            }
+
+            if (!ImGui.IsItemActive() && ImGui.IsMouseClicked(ImGuiMouseButton.Left) && !ImGui.IsItemHovered())
+            {
+                if (_names.Has(idx))
+                {
+                    ref var n = ref _names.Get(idx);
+                    n.Value = _renameBuffer;
+                }
+                _renamingEntity = -1;
+                OnChanged?.Invoke();
+            }
+
+            if (_justStartedRename)
+            {
+                ImGui.SetKeyboardFocusHere(-1);
+                _justStartedRename = false;
+            }
+            ImGui.PopItemWidth();
+        }
+        else
+        {
+            bool isMatched = !string.IsNullOrEmpty(_searchQuery) && name.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase);
+            if (isMatched)
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.85f, 0.70f, 0.25f, 1.00f));
+            }
+
+            open = ImGui.TreeNodeEx($"{name}##{idx}", flags);
+
+            if (isMatched)
+            {
+                ImGui.PopStyleColor();
+            }
+
+            // Klik na sipku rozbaluje, klik na jmeno vybira.
+            if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && !ImGui.IsItemToggledOpen())
+                _clicked = idx;
+
+            if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+            {
+                _renamingEntity = idx;
+                _renameBuffer = name;
+                _justStartedRename = true;
+            }
+
+            if (ImGui.IsItemClicked(ImGuiMouseButton.Right))
+            {
+                _clicked = idx;
+                ImGui.OpenPopup($"EntityContextMenu##{idx}");
+            }
+        }
 
         if (ImGui.BeginDragDropSource())
         {
@@ -161,6 +277,41 @@ public sealed class HierarchyPanel
         {
             AcceptEntityDrop(idx);
             ImGui.EndDragDropTarget();
+        }
+
+        // Popup context menu pro entitu
+        if (ImGui.BeginPopup($"EntityContextMenu##{idx}"))
+        {
+            if (ImGui.MenuItem("Přejmenovat (Double Click)"))
+            {
+                _renamingEntity = idx;
+                _renameBuffer = name;
+                _justStartedRename = true;
+            }
+            if (ImGui.MenuItem("Duplikovat"))
+            {
+                OnDuplicate?.Invoke();
+            }
+            if (ImGui.MenuItem("Smazat"))
+            {
+                OnDelete?.Invoke();
+            }
+            if (ImGui.MenuItem("Vynulovat Transform"))
+            {
+                if (_transforms.Has(idx))
+                {
+                    ref var t = ref _transforms.Get(idx);
+                    t.Position = Vector3.Zero;
+                    t.Rotation = Quaternion.Identity;
+                    t.Scale = Vector3.One;
+                    OnChanged?.Invoke();
+                }
+            }
+            if (ImGui.MenuItem("Vytvořit prázdného potomka"))
+            {
+                _pendingCreateChildOf = idx;
+            }
+            ImGui.EndPopup();
         }
 
         if (open)
@@ -204,5 +355,22 @@ public sealed class HierarchyPanel
 
         _world.Add(e, new Name { Value = $"Krychle {e.Index}" });
         return e;
+    }
+
+    private bool NodeOrDescendantsMatch(int idx, string query)
+    {
+        if (string.IsNullOrEmpty(query)) return true;
+        
+        string name = _names.Has(idx) ? _names.Get(idx).Value : $"Entity {idx}";
+        if (name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+        if (_children.TryGetValue(idx, out var kids))
+        {
+            foreach (int kid in kids)
+            {
+                if (NodeOrDescendantsMatch(kid, query)) return true;
+            }
+        }
+        return false;
     }
 }

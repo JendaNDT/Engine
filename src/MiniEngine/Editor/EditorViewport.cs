@@ -20,6 +20,9 @@ public sealed class EditorViewport : IDisposable
 
     public string? DroppedModelPath { get; set; }
     public Vector3 DroppedPosition { get; set; }
+    public string? DroppedTexturePath { get; set; }
+    public string? DroppedPrefabPath { get; set; }
+    public Vector3 DroppedPrefabPosition { get; set; }
 
     /// <summary>true = uzivatel drzi pravou mys nad viewportem, kamera ma vyhradni kontrolu.</summary>
     public bool Captured { get; private set; }
@@ -65,14 +68,6 @@ public sealed class EditorViewport : IDisposable
             ImGuiWindowFlags.NoScrollWithMouse |
             ImGuiWindowFlags.NoCollapse);
 
-        if (DrawToolbar is not null)
-        {
-            // Toolbar chce normalni odsazeni, okno ma padding 0.
-            ImGui.SetCursorPos(ImGui.GetCursorPos() + new Vector2(6, 4));
-            DrawToolbar();
-            ImGui.Spacing();
-        }
-
         Vector2 avail = ImGui.GetContentRegionAvail();
         int w = Math.Max(1, (int)avail.X);
         int h = Math.Max(1, (int)avail.Y);
@@ -87,6 +82,8 @@ public sealed class EditorViewport : IDisposable
             _width = w;
             _height = h;
         }
+
+        Vector2 screenPos = ImGui.GetCursorScreenPos();
 
         if (PostProcessor.Enabled)
         {
@@ -106,6 +103,27 @@ public sealed class EditorViewport : IDisposable
         else
         {
             rlImGui.ImageRenderTexture(_rt);
+        }
+
+        // Draw HUD overlay on top of the image
+        if (DrawToolbar is not null)
+        {
+            Vector2 backupPos = ImGui.GetCursorPos();
+            ImGui.SetCursorScreenPos(screenPos + new Vector2(10, 10));
+            
+            ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.08f, 0.08f, 0.10f, 0.75f));
+            ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 4f);
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(8, 6));
+            
+            if (ImGui.BeginChild("ViewportHUD", new Vector2(avail.X - 20, 38f), ImGuiChildFlags.None, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
+            {
+                DrawToolbar();
+                ImGui.EndChild();
+            }
+            
+            ImGui.PopStyleVar(2);
+            ImGui.PopStyleColor();
+            ImGui.SetCursorPos(backupPos);
         }
 
         if (ImGui.BeginDragDropTarget())
@@ -136,6 +154,49 @@ public sealed class EditorViewport : IDisposable
                     }
                 }
             }
+
+            var texPayload = ImGui.AcceptDragDropPayload("ASSET_TEXTURE_PATH");
+            unsafe
+            {
+                if (texPayload.NativePtr != null)
+                {
+                    int length = texPayload.DataSize;
+                    byte* dataPtr = (byte*)texPayload.Data;
+                    byte[] bytes = new byte[length];
+                    System.Runtime.InteropServices.Marshal.Copy((IntPtr)dataPtr, bytes, 0, length);
+                    string relPath = System.Text.Encoding.UTF8.GetString(bytes);
+
+                    DroppedTexturePath = relPath;
+                }
+            }
+
+            var prefabPayload = ImGui.AcceptDragDropPayload("ASSET_PREFAB_PATH");
+            unsafe
+            {
+                if (prefabPayload.NativePtr != null)
+                {
+                    int length = prefabPayload.DataSize;
+                    byte* dataPtr = (byte*)prefabPayload.Data;
+                    byte[] bytes = new byte[length];
+                    System.Runtime.InteropServices.Marshal.Copy((IntPtr)dataPtr, bytes, 0, length);
+                    string relPath = System.Text.Encoding.UTF8.GetString(bytes);
+
+                    DroppedPrefabPath = relPath;
+
+                    Ray ray = GetPickRay(camera);
+                    if (MathF.Abs(ray.Direction.Y) > 0.0001f)
+                    {
+                        float t = -ray.Position.Y / ray.Direction.Y;
+                        if (t > 0f) DroppedPrefabPosition = ray.Position + ray.Direction * t;
+                        else DroppedPrefabPosition = ray.Position + ray.Direction * 5f;
+                    }
+                    else
+                    {
+                        DroppedPrefabPosition = ray.Position + ray.Direction * 5f;
+                    }
+                }
+            }
+
             ImGui.EndDragDropTarget();
         }
 

@@ -26,6 +26,11 @@ public sealed class LightingShader : IDisposable
     private int _locMvpLight;
     private int _locShadowMap;
 
+    public int LocHasNormalMap;
+    public int LocHasMetallicRoughnessMap;
+    public int LocMetallicFactor;
+    public int LocRoughnessFactor;
+
     // Vychozi hodnoty ztlumene, at sceny nejsou prepalene (puvodni donut svitil do zluta).
     public Vector3 SunDirection = Vector3.Normalize(new Vector3(-0.5f, -1f, -0.35f));
     public Vector3 SunColor = new(1.00f, 0.95f, 0.88f);
@@ -96,6 +101,11 @@ public sealed class LightingShader : IDisposable
 
         _locMvpLight = Raylib.GetShaderLocation(Shader, "mvpLight");
         _locShadowMap = Raylib.GetShaderLocation(Shader, "shadowMap");
+
+        LocHasNormalMap = Raylib.GetShaderLocation(Shader, "hasNormalMap");
+        LocHasMetallicRoughnessMap = Raylib.GetShaderLocation(Shader, "hasMetallicRoughnessMap");
+        LocMetallicFactor = Raylib.GetShaderLocation(Shader, "metallicFactor");
+        LocRoughnessFactor = Raylib.GetShaderLocation(Shader, "roughnessFactor");
     }
 
     /// <summary>Jednou per frame pred kreslenim sceny.</summary>

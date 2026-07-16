@@ -3,6 +3,7 @@ using System.Numerics;
 using Raylib_cs;
 using MiniEngine.Core;
 using Transform = MiniEngine.Core.Transform;
+using MiniEngine.Assets;
 
 namespace MiniEngine.Rendering;
 
@@ -20,8 +21,10 @@ public struct Particle
     public Vector3 ColorStart;
     public Vector3 ColorEnd;
     public float SizeStart;
+    public float SizeMiddle;
     public float SizeEnd;
     public Vector3 Gravity;
+    public string TexturePath;
 }
 
 public sealed class ParticleSystem
@@ -81,11 +84,22 @@ public sealed class ParticleSystem
 
             float progress = p.Age / p.Lifetime;
             p.Color = Vector3.Lerp(p.ColorStart, p.ColorEnd, progress);
-            p.Size = p.SizeStart + progress * (p.SizeEnd - p.SizeStart);
+
+            // Interpolace velikosti Start -> Middle -> End
+            if (progress < 0.5f)
+            {
+                float tSegment = progress * 2f;
+                p.Size = p.SizeStart + tSegment * (p.SizeMiddle - p.SizeStart);
+            }
+            else
+            {
+                float tSegment = (progress - 0.5f) * 2f;
+                p.Size = p.SizeMiddle + tSegment * (p.SizeEnd - p.SizeMiddle);
+            }
         }
     }
 
-    public void Draw()
+    public void Draw(Camera3D camera, AssetManager assets)
     {
         for (int i = 0; i < _particles.Length; i++)
         {
@@ -98,6 +112,17 @@ public sealed class ParticleSystem
                 (byte)Math.Clamp(p.Color.Z * 255f, 0f, 255f),
                 (byte)255
             );
+
+            // Pokud je nastavena textura, kreslime ji jako billboard otoceny ke kamere
+            if (!string.IsNullOrEmpty(p.TexturePath))
+            {
+                var tex = assets.GetTexture(p.TexturePath);
+                if (tex.Id > 0)
+                {
+                    Raylib.DrawBillboard(camera, tex, p.Position, p.Size, color);
+                    continue;
+                }
+            }
 
             Raylib.DrawCubeV(p.Position, new Vector3(p.Size), color);
         }
@@ -113,11 +138,11 @@ public sealed class ParticleSystem
                 ref var p = ref _particles[_nextFreeIndex];
                 p.Active = true;
                 p.Position = position;
-                
+
                 float rx = (float)_rng.NextDouble();
                 float ry = (float)_rng.NextDouble();
                 float rz = (float)_rng.NextDouble();
-                
+
                 p.Velocity = new Vector3(
                     emitter.VelocityMin.X + rx * (emitter.VelocityMax.X - emitter.VelocityMin.X),
                     emitter.VelocityMin.Y + ry * (emitter.VelocityMax.Y - emitter.VelocityMin.Y),
@@ -130,9 +155,11 @@ public sealed class ParticleSystem
                 p.ColorStart = emitter.ColorStart;
                 p.ColorEnd = emitter.ColorEnd;
                 p.SizeStart = emitter.SizeStart;
+                p.SizeMiddle = emitter.SizeMiddle;
                 p.SizeEnd = emitter.SizeEnd;
                 p.Gravity = emitter.Gravity;
-                
+                p.TexturePath = emitter.TexturePath;
+
                 p.Color = p.ColorStart;
                 p.Size = p.SizeStart;
 

@@ -18,6 +18,18 @@ public sealed class SceneData
 {
     public List<EntityData> Entities { get; set; } = [];
     public LightingSettingsData? Lighting { get; set; }
+    public PostProcessingSettingsData? PostProcessing { get; set; }
+}
+
+public sealed class PostProcessingSettingsData
+{
+    public bool Enabled { get; set; } = true;
+    public float BloomIntensity { get; set; } = 0.6f;
+    public float BloomThreshold { get; set; } = 0.7f;
+    public float VignettePower { get; set; } = 0.3f;
+    public float Saturation { get; set; } = 1.0f;
+    public float Contrast { get; set; } = 1.0f;
+    public float ChromaticAberration { get; set; } = 0.0f;
 }
 
 public sealed class LightingSettingsData
@@ -40,6 +52,9 @@ public sealed class EntityData
     public ParticleEmitterData? ParticleEmitter { get; set; }
     public AudioSourceData? AudioSource { get; set; }
     public BehaviorData? Behavior { get; set; }
+    public TriggerData? Trigger { get; set; }
+    public ActionData? Action { get; set; }
+    public LightData? Light { get; set; }
 }
 
 public sealed class MeshRendererData
@@ -48,6 +63,10 @@ public sealed class MeshRendererData
     public float[] Tint { get; set; } = [1, 1, 1];
     public bool Visible { get; set; } = true;
     public string? AlbedoTexturePath { get; set; }
+    public string? NormalMapPath { get; set; }
+    public string? MetallicRoughnessMapPath { get; set; }
+    public float MetallicFactor { get; set; }
+    public float RoughnessFactor { get; set; }
 }
 
 public sealed class ParticleEmitterData
@@ -58,11 +77,13 @@ public sealed class ParticleEmitterData
     public float[] ColorStart { get; set; } = [1, 0.5f, 0.1f];
     public float[] ColorEnd { get; set; } = [0.2f, 0.2f, 0.2f];
     public float SizeStart { get; set; } = 0.2f;
+    public float SizeMiddle { get; set; } = 0.1f;
     public float SizeEnd { get; set; } = 0.05f;
     public float Lifetime { get; set; } = 1.5f;
     public float[] Gravity { get; set; } = [0, 1, 0];
     public float[] VelocityMin { get; set; } = [-0.5f, 1f, -0.5f];
     public float[] VelocityMax { get; set; } = [0.5f, 2f, 0.5f];
+    public string? TexturePath { get; set; }
 }
 
 public sealed class AudioSourceData
@@ -85,6 +106,28 @@ public sealed class BehaviorData
     public float Frequency { get; set; } = 1f;
 }
 
+public sealed class TriggerData
+{
+    public bool Active { get; set; }
+    public float[] Size { get; set; } = [1f, 1f, 1f];
+    public int TargetEntity { get; set; } = -1;
+}
+
+public sealed class ActionData
+{
+    public bool Active { get; set; }
+    public int ActionType { get; set; }
+    public string? ActionParam { get; set; }
+}
+
+public sealed class LightData
+{
+    public bool Active { get; set; }
+    public float[] Color { get; set; } = [1f, 0.9f, 0.7f];
+    public float Radius { get; set; } = 5f;
+    public float Intensity { get; set; } = 1f;
+}
+
 /// <summary>
 /// Source-generated JSON kontext - POVINNE kvuli NativeAOT.
 /// Reflexni serializace by v AOT publish spadla (viz DEEP_RESEARCH 2.3).
@@ -94,12 +137,17 @@ public sealed class BehaviorData
 [JsonSerializable(typeof(ParticleEmitterData))]
 [JsonSerializable(typeof(AudioSourceData))]
 [JsonSerializable(typeof(BehaviorData))]
+[JsonSerializable(typeof(TriggerData))]
+[JsonSerializable(typeof(ActionData))]
+[JsonSerializable(typeof(PostProcessingSettingsData))]
+[JsonSerializable(typeof(LightData))]
 internal partial class SceneJsonContext : JsonSerializerContext { }
 
 public static class SceneSerializer
 {
-    public static void Save(string path, Store<Transform> transforms, Store<MeshRenderer> renderers,
-        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors, AssetManager assets, LightingShader lighting)
+    public static SceneData CreateSceneData(Store<Transform> transforms, Store<MeshRenderer> renderers,
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor)
     {
         var scene = new SceneData();
         var entityIndexes = transforms.Entities;
@@ -132,7 +180,11 @@ public static class SceneSerializer
                     ModelPath = r.ModelHandle >= 0 ? assets.GetRelativePath(r.ModelHandle) : null,
                     Tint = [r.Tint.X, r.Tint.Y, r.Tint.Z],
                     Visible = r.Visible,
-                    AlbedoTexturePath = r.AlbedoTexturePath
+                    AlbedoTexturePath = r.AlbedoTexturePath,
+                    NormalMapPath = r.NormalMapPath,
+                    MetallicRoughnessMapPath = r.MetallicRoughnessMapPath,
+                    MetallicFactor = r.MetallicFactor,
+                    RoughnessFactor = r.RoughnessFactor
                 };
             }
 
@@ -147,11 +199,13 @@ public static class SceneSerializer
                     ColorStart = [pe.ColorStart.X, pe.ColorStart.Y, pe.ColorStart.Z],
                     ColorEnd = [pe.ColorEnd.X, pe.ColorEnd.Y, pe.ColorEnd.Z],
                     SizeStart = pe.SizeStart,
+                    SizeMiddle = pe.SizeMiddle,
                     SizeEnd = pe.SizeEnd,
                     Lifetime = pe.Lifetime,
                     Gravity = [pe.Gravity.X, pe.Gravity.Y, pe.Gravity.Z],
                     VelocityMin = [pe.VelocityMin.X, pe.VelocityMin.Y, pe.VelocityMin.Z],
-                    VelocityMax = [pe.VelocityMax.X, pe.VelocityMax.Y, pe.VelocityMax.Z]
+                    VelocityMax = [pe.VelocityMax.X, pe.VelocityMax.Y, pe.VelocityMax.Z],
+                    TexturePath = pe.TexturePath
                 };
             }
 
@@ -183,6 +237,40 @@ public static class SceneSerializer
                 };
             }
 
+            if (triggers.Has(idx))
+            {
+                ref var tr = ref triggers.Get(idx);
+                e.Trigger = new TriggerData
+                {
+                    Active = tr.Active,
+                    Size = [tr.Size.X, tr.Size.Y, tr.Size.Z],
+                    TargetEntity = tr.TargetEntity >= 0 && listPos.TryGetValue(tr.TargetEntity, out int targetP) ? targetP : -1
+                };
+            }
+
+            if (actions.Has(idx))
+            {
+                ref var act = ref actions.Get(idx);
+                e.Action = new ActionData
+                {
+                    Active = act.Active,
+                    ActionType = act.ActionType,
+                    ActionParam = act.ActionParam
+                };
+            }
+
+            if (lights.Has(idx))
+            {
+                ref var l = ref lights.Get(idx);
+                e.Light = new LightData
+                {
+                    Active = l.Active,
+                    Color = [l.Color.X, l.Color.Y, l.Color.Z],
+                    Radius = l.Radius,
+                    Intensity = l.Intensity
+                };
+            }
+
             scene.Entities.Add(e);
         }
 
@@ -195,15 +283,24 @@ public static class SceneSerializer
             SpecStrength = lighting.SpecStrength
         };
 
-        File.WriteAllText(path, JsonSerializer.Serialize(scene, SceneJsonContext.Default.SceneData));
+        scene.PostProcessing = new PostProcessingSettingsData
+        {
+            Enabled = postProcessor.Enabled,
+            BloomIntensity = postProcessor.BloomIntensity,
+            BloomThreshold = postProcessor.BloomThreshold,
+            VignettePower = postProcessor.VignettePower,
+            Saturation = postProcessor.Saturation,
+            Contrast = postProcessor.Contrast,
+            ChromaticAberration = postProcessor.ChromaticAberration
+        };
+
+        return scene;
     }
 
-    public static void Load(string path, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
-        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors, AssetManager assets, LightingShader lighting)
+    public static void ApplySceneData(SceneData scene, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor)
     {
-        var scene = JsonSerializer.Deserialize(File.ReadAllText(path), SceneJsonContext.Default.SceneData);
-        if (scene is null) return;
-
         if (scene.Lighting is { } l)
         {
             lighting.SunDirection = new Vector3(l.SunDirection[0], l.SunDirection[1], l.SunDirection[2]);
@@ -213,8 +310,18 @@ public static class SceneSerializer
             lighting.SpecStrength = l.SpecStrength;
         }
 
+        if (scene.PostProcessing is { } pp)
+        {
+            postProcessor.Enabled = pp.Enabled;
+            postProcessor.BloomIntensity = pp.BloomIntensity;
+            postProcessor.BloomThreshold = pp.BloomThreshold;
+            postProcessor.VignettePower = pp.VignettePower;
+            postProcessor.Saturation = pp.Saturation;
+            postProcessor.Contrast = pp.Contrast;
+            postProcessor.ChromaticAberration = pp.ChromaticAberration;
+        }
+
         // 1) Smazat soucasnou scenu = vsechno, co ma Transform.
-        //    Model handly se uvolni (refcount), GPU pamet nezustane viset.
         var current = transforms.Entities;
         var toDestroy = new int[current.Length];
         current.CopyTo(toDestroy);
@@ -259,7 +366,11 @@ public static class SceneSerializer
                     ModelHandle = handle,
                     Tint = new Vector3(mr.Tint[0], mr.Tint[1], mr.Tint[2]),
                     Visible = mr.Visible,
-                    AlbedoTexturePath = mr.AlbedoTexturePath ?? ""
+                    AlbedoTexturePath = mr.AlbedoTexturePath ?? "",
+                    NormalMapPath = mr.NormalMapPath ?? "",
+                    MetallicRoughnessMapPath = mr.MetallicRoughnessMapPath ?? "",
+                    MetallicFactor = mr.MetallicFactor,
+                    RoughnessFactor = mr.RoughnessFactor
                 });
             }
 
@@ -273,11 +384,13 @@ public static class SceneSerializer
                     ColorStart = new Vector3(pe.ColorStart[0], pe.ColorStart[1], pe.ColorStart[2]),
                     ColorEnd = new Vector3(pe.ColorEnd[0], pe.ColorEnd[1], pe.ColorEnd[2]),
                     SizeStart = pe.SizeStart,
+                    SizeMiddle = pe.SizeMiddle,
                     SizeEnd = pe.SizeEnd,
                     Lifetime = pe.Lifetime,
                     Gravity = new Vector3(pe.Gravity[0], pe.Gravity[1], pe.Gravity[2]),
                     VelocityMin = new Vector3(pe.VelocityMin[0], pe.VelocityMin[1], pe.VelocityMin[2]),
-                    VelocityMax = new Vector3(pe.VelocityMax[0], pe.VelocityMax[1], pe.VelocityMax[2])
+                    VelocityMax = new Vector3(pe.VelocityMax[0], pe.VelocityMax[1], pe.VelocityMax[2]),
+                    TexturePath = pe.TexturePath ?? ""
                 });
             }
 
@@ -308,6 +421,359 @@ public static class SceneSerializer
                     Initialized = false
                 });
             }
+
+            if (e.Trigger is { } tr)
+            {
+                triggers.Add(idx, new TriggerComponent
+                {
+                    Active = tr.Active,
+                    Size = new Vector3(tr.Size[0], tr.Size[1], tr.Size[2]),
+                    TargetEntity = tr.TargetEntity, // Bude renamovano nize
+                    WasTriggered = false
+                });
+            }
+
+            if (e.Action is { } act)
+            {
+                actions.Add(idx, new ActionComponent
+                {
+                    Active = act.Active,
+                    ActionType = act.ActionType,
+                    ActionParam = act.ActionParam ?? "",
+                    TriggeredState = false
+                });
+            }
+
+            if (e.Light is { } ld)
+            {
+                lights.Add(idx, new LightComponent
+                {
+                    Active = ld.Active,
+                    Color = new Vector3(ld.Color[0], ld.Color[1], ld.Color[2]),
+                    Radius = ld.Radius,
+                    Intensity = ld.Intensity
+                });
+            }
         }
+
+        // Remap TargetEntity pro spoustec / akce
+        for (int i = 0; i < scene.Entities.Count; i++)
+        {
+            var e = scene.Entities[i];
+            int idx = created[i];
+            if (e.Trigger is { } tr && tr.TargetEntity >= 0 && tr.TargetEntity < created.Length)
+            {
+                ref var triggerComp = ref triggers.Get(idx);
+                triggerComp.TargetEntity = created[tr.TargetEntity];
+            }
+        }
+    }
+
+    public static SceneData CreatePrefabData(int rootIdx, Store<Transform> transforms, Store<MeshRenderer> renderers,
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets)
+    {
+        var scene = new SceneData();
+        if (!transforms.Has(rootIdx)) return scene;
+
+        var entityIndexes = transforms.Entities;
+        var subtree = new List<int> { rootIdx };
+        for (int i = 0; i < entityIndexes.Length; i++)
+        {
+            int ent = entityIndexes[i];
+            if (ent != rootIdx && TransformHierarchy.IsDescendantOf(transforms, ent, rootIdx))
+            {
+                subtree.Add(ent);
+            }
+        }
+
+        var listPos = new Dictionary<int, int>();
+        for (int i = 0; i < subtree.Count; i++)
+            listPos[subtree[i]] = i;
+
+        foreach (int idx in subtree)
+        {
+            ref var t = ref transforms.Get(idx);
+
+            var e = new EntityData
+            {
+                Name = names.Has(idx) ? names.Get(idx).Value : $"Entity {idx}",
+                Position = [t.Position.X, t.Position.Y, t.Position.Z],
+                Rotation = [t.Rotation.X, t.Rotation.Y, t.Rotation.Z, t.Rotation.W],
+                Scale = [t.Scale.X, t.Scale.Y, t.Scale.Z],
+                Parent = t.Parent >= 0 && listPos.TryGetValue(t.Parent, out int p) ? p : -1
+            };
+
+            if (idx == rootIdx)
+            {
+                e.Parent = -1;
+            }
+
+            if (renderers.Has(idx))
+            {
+                ref var r = ref renderers.Get(idx);
+                e.MeshRenderer = new MeshRendererData
+                {
+                    ModelPath = r.ModelHandle >= 0 ? assets.GetRelativePath(r.ModelHandle) : null,
+                    Tint = [r.Tint.X, r.Tint.Y, r.Tint.Z],
+                    Visible = r.Visible,
+                    AlbedoTexturePath = r.AlbedoTexturePath,
+                    NormalMapPath = r.NormalMapPath,
+                    MetallicRoughnessMapPath = r.MetallicRoughnessMapPath,
+                    MetallicFactor = r.MetallicFactor,
+                    RoughnessFactor = r.RoughnessFactor
+                };
+            }
+
+            if (emitters.Has(idx))
+            {
+                ref var pe = ref emitters.Get(idx);
+                e.ParticleEmitter = new ParticleEmitterData
+                {
+                    Active = pe.Active,
+                    Type = pe.Type,
+                    SpawnRate = pe.SpawnRate,
+                    ColorStart = [pe.ColorStart.X, pe.ColorStart.Y, pe.ColorStart.Z],
+                    ColorEnd = [pe.ColorEnd.X, pe.ColorEnd.Y, pe.ColorEnd.Z],
+                    SizeStart = pe.SizeStart,
+                    SizeMiddle = pe.SizeMiddle,
+                    SizeEnd = pe.SizeEnd,
+                    Lifetime = pe.Lifetime,
+                    Gravity = [pe.Gravity.X, pe.Gravity.Y, pe.Gravity.Z],
+                    VelocityMin = [pe.VelocityMin.X, pe.VelocityMin.Y, pe.VelocityMin.Z],
+                    VelocityMax = [pe.VelocityMax.X, pe.VelocityMax.Y, pe.VelocityMax.Z],
+                    TexturePath = pe.TexturePath
+                };
+            }
+
+            if (audioSources.Has(idx))
+            {
+                ref var src = ref audioSources.Get(idx);
+                e.AudioSource = new AudioSourceData
+                {
+                    Active = src.Active,
+                    ClipPath = src.ClipPath,
+                    Volume = src.Volume,
+                    Pitch = src.Pitch,
+                    Loop = src.Loop,
+                    Spatial3D = src.Spatial3D
+                };
+            }
+
+            if (behaviors.Has(idx))
+            {
+                ref var b = ref behaviors.Get(idx);
+                e.Behavior = new BehaviorData
+                {
+                    Active = b.Active,
+                    Type = b.Type,
+                    Axis = [b.Axis.X, b.Axis.Y, b.Axis.Z],
+                    Speed = b.Speed,
+                    Range = b.Range,
+                    Frequency = b.Frequency
+                };
+            }
+
+            if (triggers.Has(idx))
+            {
+                ref var tr = ref triggers.Get(idx);
+                e.Trigger = new TriggerData
+                {
+                    Active = tr.Active,
+                    Size = [tr.Size.X, tr.Size.Y, tr.Size.Z],
+                    TargetEntity = tr.TargetEntity >= 0 && listPos.TryGetValue(tr.TargetEntity, out int targetP) ? targetP : -1
+                };
+            }
+
+            if (actions.Has(idx))
+            {
+                ref var act = ref actions.Get(idx);
+                e.Action = new ActionData
+                {
+                    Active = act.Active,
+                    ActionType = act.ActionType,
+                    ActionParam = act.ActionParam
+                };
+            }
+
+            if (lights.Has(idx))
+            {
+                ref var l = ref lights.Get(idx);
+                e.Light = new LightData
+                {
+                    Active = l.Active,
+                    Color = [l.Color.X, l.Color.Y, l.Color.Z],
+                    Radius = l.Radius,
+                    Intensity = l.Intensity
+                };
+            }
+
+            scene.Entities.Add(e);
+        }
+
+        scene.Lighting = null;
+        return scene;
+    }
+
+    public static int ApplyPrefabData(SceneData prefab, Vector3 spawnPosition, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets)
+    {
+        if (prefab.Entities.Count == 0) return -1;
+
+        var created = new int[prefab.Entities.Count];
+        for (int i = 0; i < prefab.Entities.Count; i++)
+            created[i] = world.Create().Index;
+
+        for (int i = 0; i < prefab.Entities.Count; i++)
+        {
+            var e = prefab.Entities[i];
+            int idx = created[i];
+
+            var t = Transform.Identity;
+            t.Position = new Vector3(e.Position[0], e.Position[1], e.Position[2]);
+            t.Rotation = new Quaternion(e.Rotation[0], e.Rotation[1], e.Rotation[2], e.Rotation[3]);
+            t.Scale = new Vector3(e.Scale[0], e.Scale[1], e.Scale[2]);
+            t.Parent = e.Parent >= 0 ? created[e.Parent] : -1;
+
+            if (i == 0)
+            {
+                t.Position = spawnPosition;
+            }
+
+            transforms.Add(idx, t);
+            names.Add(idx, new Name { Value = e.Name });
+
+            if (e.MeshRenderer is { } mr)
+            {
+                int handle = mr.ModelPath is null
+                    ? -1
+                    : assets.LoadModel(Path.Combine(AssetManager.AssetsRoot, mr.ModelPath));
+
+                renderers.Add(idx, new MeshRenderer
+                {
+                    ModelHandle = handle,
+                    Tint = new Vector3(mr.Tint[0], mr.Tint[1], mr.Tint[2]),
+                    Visible = mr.Visible,
+                    AlbedoTexturePath = mr.AlbedoTexturePath ?? "",
+                    NormalMapPath = mr.NormalMapPath ?? "",
+                    MetallicRoughnessMapPath = mr.MetallicRoughnessMapPath ?? "",
+                    MetallicFactor = mr.MetallicFactor,
+                    RoughnessFactor = mr.RoughnessFactor
+                });
+            }
+
+            if (e.ParticleEmitter is { } pe)
+            {
+                emitters.Add(idx, new ParticleEmitter
+                {
+                    Active = pe.Active,
+                    Type = pe.Type,
+                    SpawnRate = pe.SpawnRate,
+                    ColorStart = new Vector3(pe.ColorStart[0], pe.ColorStart[1], pe.ColorStart[2]),
+                    ColorEnd = new Vector3(pe.ColorEnd[0], pe.ColorEnd[1], pe.ColorEnd[2]),
+                    SizeStart = pe.SizeStart,
+                    SizeMiddle = pe.SizeMiddle,
+                    SizeEnd = pe.SizeEnd,
+                    Lifetime = pe.Lifetime,
+                    Gravity = new Vector3(pe.Gravity[0], pe.Gravity[1], pe.Gravity[2]),
+                    VelocityMin = new Vector3(pe.VelocityMin[0], pe.VelocityMin[1], pe.VelocityMin[2]),
+                    VelocityMax = new Vector3(pe.VelocityMax[0], pe.VelocityMax[1], pe.VelocityMax[2]),
+                    TexturePath = pe.TexturePath ?? ""
+                });
+            }
+
+            if (e.AudioSource is { } src)
+            {
+                audioSources.Add(idx, new AudioSourceComponent
+                {
+                    Active = src.Active,
+                    ClipPath = src.ClipPath ?? "",
+                    Volume = src.Volume,
+                    Pitch = src.Pitch,
+                    Loop = src.Loop,
+                    Spatial3D = src.Spatial3D,
+                    IsPlaying = false
+                });
+            }
+
+            if (e.Behavior is { } b)
+            {
+                behaviors.Add(idx, new BehaviorComponent
+                {
+                    Active = b.Active,
+                    Type = b.Type,
+                    Axis = b.Axis is { Length: >= 3 } ? new Vector3(b.Axis[0], b.Axis[1], b.Axis[2]) : Vector3.UnitY,
+                    Speed = b.Speed,
+                    Range = b.Range,
+                    Frequency = b.Frequency,
+                    Initialized = false
+                });
+            }
+
+            if (e.Trigger is { } tr)
+            {
+                triggers.Add(idx, new TriggerComponent
+                {
+                    Active = tr.Active,
+                    Size = new Vector3(tr.Size[0], tr.Size[1], tr.Size[2]),
+                    TargetEntity = tr.TargetEntity, // Bude renamovano nize
+                    WasTriggered = false
+                });
+            }
+
+            if (e.Action is { } act)
+            {
+                actions.Add(idx, new ActionComponent
+                {
+                    Active = act.Active,
+                    ActionType = act.ActionType,
+                    ActionParam = act.ActionParam ?? "",
+                    TriggeredState = false
+                });
+            }
+
+            if (e.Light is { } l)
+            {
+                lights.Add(idx, new LightComponent
+                {
+                    Active = l.Active,
+                    Color = new Vector3(l.Color[0], l.Color[1], l.Color[2]),
+                    Radius = l.Radius,
+                    Intensity = l.Intensity
+                });
+            }
+        }
+
+        // Remap TargetEntity pro spoustec / akce v prefabu
+        for (int i = 0; i < prefab.Entities.Count; i++)
+        {
+            var e = prefab.Entities[i];
+            int idx = created[i];
+            if (e.Trigger is { } tr && tr.TargetEntity >= 0 && tr.TargetEntity < created.Length)
+            {
+                ref var triggerComp = ref triggers.Get(idx);
+                triggerComp.TargetEntity = created[tr.TargetEntity];
+            }
+        }
+
+        return created[0];
+    }
+
+    public static void Save(string path, Store<Transform> transforms, Store<MeshRenderer> renderers,
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor)
+    {
+        var scene = CreateSceneData(transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, lighting, postProcessor);
+        File.WriteAllText(path, JsonSerializer.Serialize(scene, SceneJsonContext.Default.SceneData));
+    }
+
+    public static void Load(string path, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
+        Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor)
+    {
+        var scene = JsonSerializer.Deserialize(File.ReadAllText(path), SceneJsonContext.Default.SceneData);
+        if (scene is null) return;
+        ApplySceneData(scene, world, transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, lighting, postProcessor);
     }
 }
