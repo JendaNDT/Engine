@@ -57,6 +57,13 @@ public sealed class EntityData
     public TriggerData? Trigger { get; set; }
     public ActionData? Action { get; set; }
     public LightData? Light { get; set; }
+    public BehaviorGraphData? BehaviorGraph { get; set; }
+}
+
+public sealed class BehaviorGraphData
+{
+    public bool Enabled { get; set; }
+    public string? GraphJson { get; set; }
 }
 
 public sealed class MeshRendererData
@@ -143,6 +150,7 @@ public sealed class LightData
 [JsonSerializable(typeof(ActionData))]
 [JsonSerializable(typeof(PostProcessingSettingsData))]
 [JsonSerializable(typeof(LightData))]
+[JsonSerializable(typeof(BehaviorGraphData))]
 internal partial class SceneJsonContext : JsonSerializerContext { }
 
 public static class SceneSerializer
@@ -150,7 +158,7 @@ public static class SceneSerializer
     public static SceneData CreateSceneData(Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
         Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor,
-        Store<PrefabLink> prefabLinks)
+        Store<PrefabLink> prefabLinks, Store<BehaviorGraphComponent>? behaviorGraphs = null)
     {
         var scene = new SceneData();
         var entityIndexes = transforms.Entities;
@@ -281,6 +289,16 @@ public static class SceneSerializer
                 };
             }
 
+            if (behaviorGraphs != null && behaviorGraphs.Has(idx))
+            {
+                ref var bg = ref behaviorGraphs.Get(idx);
+                e.BehaviorGraph = new BehaviorGraphData
+                {
+                    Enabled = bg.Enabled,
+                    GraphJson = bg.GraphJson
+                };
+            }
+
             scene.Entities.Add(e);
         }
 
@@ -310,7 +328,7 @@ public static class SceneSerializer
     public static void ApplySceneData(SceneData scene, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
         Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor,
-        Store<PrefabLink> prefabLinks)
+        Store<PrefabLink> prefabLinks, Store<BehaviorGraphComponent>? behaviorGraphs = null)
     {
         if (scene.Lighting is { } l)
         {
@@ -350,6 +368,10 @@ public static class SceneSerializer
             if (prefabLinks != null && prefabLinks.Has(idx))
             {
                 prefabLinks.RemoveAt(idx);
+            }
+            if (behaviorGraphs != null && behaviorGraphs.Has(idx))
+            {
+                behaviorGraphs.RemoveAt(idx);
             }
             world.Destroy(world.EntityFromIndex(idx));
         }
@@ -487,6 +509,15 @@ public static class SceneSerializer
                     Overrides = e.PrefabOverrides ?? ""
                 });
             }
+
+            if (behaviorGraphs != null && e.BehaviorGraph != null)
+            {
+                behaviorGraphs.Add(idx, new BehaviorGraphComponent
+                {
+                    Enabled = e.BehaviorGraph.Enabled,
+                    GraphJson = e.BehaviorGraph.GraphJson ?? ""
+                });
+            }
         }
 
         // Remap TargetEntity pro spoustec / akce
@@ -510,7 +541,7 @@ public static class SceneSerializer
     public static SceneData CreatePrefabData(int rootIdx, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
         Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets,
-        Store<PrefabLink> prefabLinks)
+        Store<PrefabLink> prefabLinks, Store<BehaviorGraphComponent>? behaviorGraphs = null)
     {
         var scene = new SceneData();
         if (!transforms.Has(rootIdx)) return scene;
@@ -654,6 +685,16 @@ public static class SceneSerializer
                 };
             }
 
+            if (behaviorGraphs != null && behaviorGraphs.Has(idx))
+            {
+                ref var bg = ref behaviorGraphs.Get(idx);
+                e.BehaviorGraph = new BehaviorGraphData
+                {
+                    Enabled = bg.Enabled,
+                    GraphJson = bg.GraphJson
+                };
+            }
+
             scene.Entities.Add(e);
         }
 
@@ -664,7 +705,7 @@ public static class SceneSerializer
     public static int ApplyPrefabData(SceneData prefab, Vector3 spawnPosition, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
         Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets,
-        string prefabPath, Store<PrefabLink> prefabLinks)
+        string prefabPath, Store<PrefabLink> prefabLinks, Store<BehaviorGraphComponent>? behaviorGraphs = null)
     {
         if (prefab.Entities.Count == 0) return -1;
 
@@ -802,6 +843,14 @@ public static class SceneSerializer
             {
                 prefabLinks.Add(idx, new PrefabLink { PrefabPath = prefabPath, Overrides = "" });
             }
+            if (behaviorGraphs != null && e.BehaviorGraph != null)
+            {
+                behaviorGraphs.Add(idx, new BehaviorGraphComponent
+                {
+                    Enabled = e.BehaviorGraph.Enabled,
+                    GraphJson = e.BehaviorGraph.GraphJson ?? ""
+                });
+            }
         }
 
         // Remap TargetEntity pro spoustec / akce v prefabu
@@ -822,26 +871,26 @@ public static class SceneSerializer
     public static void Save(string path, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
         Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor,
-        Store<PrefabLink> prefabLinks)
+        Store<PrefabLink> prefabLinks, Store<BehaviorGraphComponent>? behaviorGraphs = null)
     {
-        var scene = CreateSceneData(transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, lighting, postProcessor, prefabLinks);
+        var scene = CreateSceneData(transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, lighting, postProcessor, prefabLinks, behaviorGraphs);
         File.WriteAllText(path, JsonSerializer.Serialize(scene, SceneJsonContext.Default.SceneData));
     }
 
     public static void Load(string path, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
         Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets, LightingShader lighting, PostProcessing postProcessor,
-        Store<PrefabLink> prefabLinks)
+        Store<PrefabLink> prefabLinks, Store<BehaviorGraphComponent>? behaviorGraphs = null)
     {
         var scene = JsonSerializer.Deserialize(File.ReadAllText(path), SceneJsonContext.Default.SceneData);
         if (scene is null) return;
-        ApplySceneData(scene, world, transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, lighting, postProcessor, prefabLinks);
+        ApplySceneData(scene, world, transforms, renderers, names, emitters, audioSources, behaviors, triggers, actions, lights, assets, lighting, postProcessor, prefabLinks, behaviorGraphs);
     }
 
     public static void PropagatePrefabs(World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
         Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors,
         Store<TriggerComponent> triggers, Store<ActionComponent> actions, Store<LightComponent> lights, AssetManager assets,
-        Store<PrefabLink> prefabLinks)
+        Store<PrefabLink> prefabLinks, Store<BehaviorGraphComponent>? behaviorGraphs = null)
     {
         var roots = prefabLinks.Entities;
         var rootsCopy = new int[roots.Length];
@@ -988,6 +1037,31 @@ public static class SceneSerializer
                         if (!entOverrides.Contains("Light.Removed"))
                         {
                             lights.RemoveAt(sEnt);
+                        }
+                    }
+
+                    if (behaviorGraphs != null)
+                    {
+                        if (pEnt.BehaviorGraph != null)
+                        {
+                            if (!behaviorGraphs.Has(sEnt))
+                            {
+                                behaviorGraphs.Add(sEnt, new BehaviorGraphComponent { Enabled = true, GraphJson = "" });
+                            }
+                            ref var bg = ref behaviorGraphs.Get(sEnt);
+
+                            if (!entOverrides.Contains("BehaviorGraph.Enabled"))
+                                bg.Enabled = pEnt.BehaviorGraph.Enabled;
+
+                            if (!entOverrides.Contains("BehaviorGraph.GraphJson"))
+                                bg.GraphJson = pEnt.BehaviorGraph.GraphJson ?? "";
+                        }
+                        else if (behaviorGraphs.Has(sEnt))
+                        {
+                            if (!entOverrides.Contains("BehaviorGraph.Removed"))
+                            {
+                                behaviorGraphs.RemoveAt(sEnt);
+                            }
                         }
                     }
                 }

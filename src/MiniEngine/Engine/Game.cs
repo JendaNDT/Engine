@@ -37,6 +37,9 @@ public sealed class Game : IDisposable
     private readonly Store<ActionComponent> _actions;
     private readonly Store<LightComponent> _lights;
     private readonly Store<PrefabLink> _prefabLinks;
+    private readonly Store<BehaviorGraphComponent> _graphs;
+    private readonly NodeEditorPanel _nodeEditor;
+    private readonly Dictionary<int, BehaviorGraph> _activeGraphs = new();
     private readonly ParticleSystem _particleSystem = new();
     private readonly AudioSystem _audioSystem = new();
     private readonly BehaviorSystem _behaviorSystem = new();
@@ -112,6 +115,8 @@ public sealed class Game : IDisposable
         _actions = _world.Store<ActionComponent>();
         _lights = _world.Store<LightComponent>();
         _prefabLinks = _world.Store<PrefabLink>();
+        _graphs = _world.Store<BehaviorGraphComponent>();
+        _nodeEditor = new NodeEditorPanel(_world);
     }
 
     public void Run()
@@ -353,17 +358,80 @@ public sealed class Game : IDisposable
             }
             _wasAnyItemActive = anyItemActive;
 
-            ImGui.DockSpaceOverViewport();   // pozn.: overload se mezi verzemi ImGui.NET lisi
-
             // Vychozi rozlozeni: Hierarchy vlevo, Viewport uprostred, Inspector vpravo, Stats vlevo dole.
             // FirstUseEver = plati jen dokud okno nema ulozene rozlozeni v imgui.ini.
             var mainVp = ImGui.GetMainViewport();
             Vector2 wp = mainVp.WorkPos;
             Vector2 ws = mainVp.WorkSize;
+
+            // 1. Globální horní lišta (Global Toolbar)
+            float toolbarHeight = 36f;
+            NextWindowRect(wp, new Vector2(ws.X, toolbarHeight));
+            ImGui.Begin("Toolbar", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
+            {
+                // Play / Stop
+                if (_physics == null)
+                {
+                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.6f, 0.3f, 1.0f));
+                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.15f, 0.7f, 0.35f, 1.0f));
+                    if (ImGui.Button(" ▶ Spustit ")) StartPhysics();
+                    ImGui.PopStyleColor(2);
+                }
+                else
+                {
+                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.8f, 0.15f, 0.15f, 1.0f));
+                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.9f, 0.2f, 0.2f, 1.0f));
+                    if (ImGui.Button(" ■ Zastavit ")) StopPhysics();
+                    ImGui.PopStyleColor(2);
+                }
+
+                ImGui.SameLine();
+                ImGui.TextDisabled(" | ");
+                ImGui.SameLine();
+
+                // Save / Load
+                if (ImGui.Button(" 💾 Uložit ")) SaveScene();
+                ImGui.SameLine();
+                if (ImGui.Button(" 📂 Načíst ")) LoadScene();
+
+                ImGui.SameLine();
+                ImGui.TextDisabled(" | ");
+                ImGui.SameLine();
+
+                // Undo / Redo
+                bool canUndo = _history.CanUndo;
+                bool canRedo = _history.CanRedo;
+
+                if (!canUndo) ImGui.BeginDisabled();
+                if (ImGui.Button(" ↶ Zpět ")) Undo();
+                if (!canUndo) ImGui.EndDisabled();
+
+                ImGui.SameLine();
+
+                if (!canRedo) ImGui.BeginDisabled();
+                if (ImGui.Button(" ↷ Znovu ")) Redo();
+                if (!canRedo) ImGui.EndDisabled();
+                
+                ImGui.SameLine();
+                ImGui.TextDisabled($"| Kroků zpět: {(canUndo ? "k dispozici" : "není k dispozici")}");
+            }
+            ImGui.End();
+
+            // Upravíme rozměry pro zbylé panely podle horní lišty
+            wp.Y += toolbarHeight;
+            ws.Y -= toolbarHeight;
+
             float leftW = MathF.Min(300f, ws.X * 0.20f);
             float rightW = MathF.Min(360f, ws.X * 0.24f);
+            float centerW = ws.X - leftW - rightW;
 
-            NextWindowRect(new Vector2(wp.X + leftW, wp.Y), new Vector2(ws.X - leftW - rightW, ws.Y * 0.70f));
+            // 2. Levý panel: Hierarchy (na celou výšku)
+            NextWindowRect(wp, new Vector2(leftW, ws.Y));
+            _hierarchy.Draw(_selection);
+
+            // 3. Viewport (střed nahoře)
+            float viewportH = ws.Y * 0.62f;
+            NextWindowRect(new Vector2(wp.X + leftW, wp.Y), new Vector2(centerW, viewportH));
             _viewport.DrawPanel(_camera.Camera);
             if (_viewport.DroppedModelPath != null)
             {
@@ -381,25 +449,54 @@ public sealed class Game : IDisposable
                 _viewport.DroppedPrefabPath = null;
             }
             HandleGizmo();     // PRED pickingem - klik na sipku nesmi zmenit vyber
-
-            NextWindowRect(new Vector2(wp.X + leftW, wp.Y + ws.Y * 0.70f), new Vector2(ws.X - leftW - rightW, ws.Y * 0.30f));
-            DrawAssetBrowserPanel();
             HandlePicking();   // hned po DrawPanel - Hovered a Origin jsou cerstvé
 
-            NextWindowRect(new Vector2(wp.X, wp.Y), new Vector2(leftW, ws.Y * 0.58f));
-            _hierarchy.Draw(_selection);
+            // Statistiky jako překryvná vrstva ve viewportu
+            DrawViewportStatsOverlay();
 
-            NextWindowRect(new Vector2(wp.X + ws.X - rightW, wp.Y), new Vector2(rightW, ws.Y * 0.62f));
-            _inspector.Draw(_selection);
+            // 4. Sjednocený pravý panel (Inspector & Nastavení)
+            NextWindowRect(new Vector2(wp.X + ws.X - rightW, wp.Y), new Vector2(rightW, ws.Y));
+            ImGui.Begin("Inspector & Nastavení");
+            if (ImGui.BeginTabBar("RightTabBar"))
+            {
+                if (ImGui.BeginTabItem("Inspector"))
+                {
+                    _inspector.DrawInner(_selection);
+                    ImGui.EndTabItem();
+                }
+                if (ImGui.BeginTabItem("Světlo & Scéna"))
+                {
+                    _lightPanel.DrawInner();
+                    ImGui.EndTabItem();
+                }
+                ImGui.EndTabBar();
+            }
+            ImGui.End();
 
-            NextWindowRect(new Vector2(wp.X + ws.X - rightW, wp.Y + ws.Y * 0.62f), new Vector2(rightW, ws.Y * 0.38f));
-            _lightPanel.Draw();
-
-            NextWindowRect(new Vector2(wp.X, wp.Y + ws.Y * 0.58f), new Vector2(leftW * 0.4f, ws.Y * 0.42f));
-            DrawStatsPanel();
-
-            NextWindowRect(new Vector2(wp.X + leftW * 0.4f, wp.Y + ws.Y * 0.58f), new Vector2(leftW * 0.6f, ws.Y * 0.42f));
-            _profiler.Draw();
+            // 5. Sjednocený spodní panel (Prohlížeč, Profiler, Node Graph)
+            float bottomH = ws.Y - viewportH;
+            NextWindowRect(new Vector2(wp.X + leftW, wp.Y + viewportH), new Vector2(centerW, bottomH));
+            ImGui.Begin("Nástroje & Logika");
+            if (ImGui.BeginTabBar("BottomTabBar"))
+            {
+                if (ImGui.BeginTabItem("Prohlížeč souborů"))
+                {
+                    DrawAssetBrowserInner();
+                    ImGui.EndTabItem();
+                }
+                if (ImGui.BeginTabItem("Profiler & Výkon"))
+                {
+                    _profiler.DrawInner();
+                    ImGui.EndTabItem();
+                }
+                if (ImGui.BeginTabItem("Visual Logic Editor"))
+                {
+                    _nodeEditor.DrawInner(_selection);
+                    ImGui.EndTabItem();
+                }
+                ImGui.EndTabBar();
+            }
+            ImGui.End();
 
             MiniEngine.Editor.ToastSystem.UpdateAndDraw(dt);
 
@@ -425,6 +522,14 @@ public sealed class Game : IDisposable
         _particleSystem.Update(dt, _transforms, _emitters);
         _audioSystem.Update(_camera.Camera, _transforms, _audioSources, _assets);
         UpdateTriggers();
+
+        if (_physics is not null)
+        {
+            foreach (var kvp in _activeGraphs)
+            {
+                kvp.Value.Trigger("Event_OnUpdate", _world, kvp.Key, _physics);
+            }
+        }
 
         _assetScanTimer += dt;
         if (_assetScanTimer > 2f)
@@ -648,6 +753,30 @@ public sealed class Game : IDisposable
                 _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false, CenterOffset = Vector3.Zero });
             }
         }
+
+        // Inicializujeme aktivní behavior grafy
+        _activeGraphs.Clear();
+        var graphEntities = _graphs.Entities;
+        var graphSpan = _graphs.Span;
+        for (int i = 0; i < graphSpan.Length; i++)
+        {
+            ref var comp = ref graphSpan[i];
+            if (comp.Enabled && !string.IsNullOrEmpty(comp.GraphJson))
+            {
+                try
+                {
+                    var g = System.Text.Json.JsonSerializer.Deserialize<BehaviorGraph>(comp.GraphJson);
+                    if (g != null)
+                    {
+                        int ent = graphEntities[i];
+                        g.InitializeRuntime(_world, ent, _physics);
+                        _activeGraphs[ent] = g;
+                        g.Trigger("Event_OnStart", _world, ent, _physics);
+                    }
+                }
+                catch {}
+            }
+        }
     }
 
     private void StopPhysics()
@@ -659,13 +788,14 @@ public sealed class Game : IDisposable
         _playerEntity = -1;
         _audioSystem.StopAll(_audioSources, _assets);
         _behaviorSystem.RestoreInitialStates(_transforms, _behaviors);
+        _activeGraphs.Clear();
     }
 
     private void SaveScene()
     {
         try
         {
-            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor, _prefabLinks);
+            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor, _prefabLinks, _graphs);
             _hierarchy.SceneStatus = "Ulozeno: scene.json";
             ToastSystem.Show("Scéna uložena: scene.json");
         }
@@ -689,7 +819,7 @@ public sealed class Game : IDisposable
 
         try
         {
-            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor, _prefabLinks);
+            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _lighting, _viewport.PostProcessor, _prefabLinks, _graphs);
             _lightPanel.LoadFrom(_lighting.SunDirection);
             _selection.Clear();
             _hierarchy.SceneStatus = "Nacteno: scene.json";
@@ -1807,7 +1937,7 @@ public sealed class Game : IDisposable
             pl.Overrides = "";
             _prefabLinks.Get(rootIdx) = pl;
 
-            SceneSerializer.PropagatePrefabs(_world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _prefabLinks);
+            SceneSerializer.PropagatePrefabs(_world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _prefabLinks, _graphs);
             _hierarchy.SceneStatus = "Prefab revertnut na výchozí hodnoty";
             ToastSystem.Show("Prefab revertnut");
             
@@ -1824,7 +1954,7 @@ public sealed class Game : IDisposable
             string fullPath = Path.Combine(AppContext.BaseDirectory, "assets", pl.PrefabPath);
             try
             {
-                var prefabData = SceneSerializer.CreatePrefabData(rootIdx, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _prefabLinks);
+                var prefabData = SceneSerializer.CreatePrefabData(rootIdx, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _prefabLinks, _graphs);
                 var json = System.Text.Json.JsonSerializer.Serialize(prefabData, SceneJsonContext.Default.SceneData);
                 File.WriteAllText(fullPath, json);
 
@@ -1971,6 +2101,29 @@ public sealed class Game : IDisposable
 
         Ray ray = _viewport.GetPickRay(_camera.Camera);
         _selection.EntityIndex = PickEntity(ray);
+    }
+
+    private void DrawViewportStatsOverlay()
+    {
+        ImGui.SetNextWindowPos(_viewport.Origin + new Vector2(10f, 48f), ImGuiCond.Always); // Offset below the HUD toolbar
+        ImGui.SetNextWindowBgAlpha(0.35f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 4f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
+        ImGui.Begin("StatsOverlay", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoDocking);
+        {
+            ImGui.TextDisabled("DEBUG METRICS");
+            ImGui.Text($"FPS: {Raylib.GetFPS()}");
+            ImGui.Text($"Objekty: {_transforms.Count}");
+            ImGui.Text($"Alokace/frame: {_allocPerFrame} B");
+            if (_allocPerFrame > 0)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(new Vector4(1, 0.4f, 0.2f, 1), " (ALOKACE!)");
+            }
+            ImGui.Text($"Kamera: {(_viewport.Captured ? "Zachyčená" : "Volná")}");
+        }
+        ImGui.End();
+        ImGui.PopStyleVar(2);
     }
 
     private static void NextWindowRect(Vector2 pos, Vector2 size)
@@ -2177,7 +2330,7 @@ public sealed class Game : IDisposable
                     beforeAlive.Add(activeEntities[i]);
                 }
 
-                int newRoot = SceneSerializer.ApplyPrefabData(prefabData, worldPos, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, relPath, _prefabLinks);
+                int newRoot = SceneSerializer.ApplyPrefabData(prefabData, worldPos, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, relPath, _prefabLinks, _graphs);
                 
                 RecordPrefabSpawn(beforeAlive, newRoot, relPath);
             }
@@ -2212,7 +2365,7 @@ public sealed class Game : IDisposable
                     beforeAlive.Add(activeEntities[i]);
                 }
 
-                int newRoot = SceneSerializer.ApplyPrefabData(prefabData, spawnPos, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, relPath, _prefabLinks);
+                int newRoot = SceneSerializer.ApplyPrefabData(prefabData, spawnPos, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, relPath, _prefabLinks, _graphs);
                 
                 RecordPrefabSpawn(beforeAlive, newRoot, relPath);
             }
@@ -2244,7 +2397,7 @@ public sealed class Game : IDisposable
 
         try
         {
-            var prefabData = SceneSerializer.CreatePrefabData(rootIdx, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _prefabLinks);
+            var prefabData = SceneSerializer.CreatePrefabData(rootIdx, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _triggers, _actions, _lights, _assets, _prefabLinks, _graphs);
             var json = System.Text.Json.JsonSerializer.Serialize(prefabData, SceneJsonContext.Default.SceneData);
             File.WriteAllText(fullPath, json);
             _hierarchy.SceneStatus = $"Prefab uložen: prefabs/{filename}";
@@ -2306,6 +2459,15 @@ public sealed class Game : IDisposable
             bool currentlyTriggered = isCameraInside || isAnyOtherEntityInside;
             if (currentlyTriggered && !trigger.WasTriggered)
             {
+                if (_activeGraphs.TryGetValue(triggerEnt, out var gTrigger))
+                {
+                    gTrigger.Trigger("Event_OnCollision", _world, triggerEnt, _physics, trigger.TargetEntity);
+                }
+                if (trigger.TargetEntity >= 0 && _activeGraphs.TryGetValue(trigger.TargetEntity, out var gTarget))
+                {
+                    gTarget.Trigger("Event_OnCollision", _world, trigger.TargetEntity, _physics, triggerEnt);
+                }
+
                 // Vstup do zóny -> Vyvolat akci
                 if (trigger.TargetEntity >= 0 && _actions.Has(trigger.TargetEntity))
                 {
@@ -2356,6 +2518,12 @@ public sealed class Game : IDisposable
     private unsafe void DrawAssetBrowserPanel()
     {
         ImGui.Begin("Asset Browser");
+        DrawAssetBrowserInner();
+        ImGui.End();
+    }
+
+    private unsafe void DrawAssetBrowserInner()
+    {
 
         if (ImGui.Button("Obnovit")) RefreshAssetFiles();
         ImGui.SameLine();
@@ -2492,8 +2660,6 @@ public sealed class Game : IDisposable
             }
         }
         ImGui.EndChild();
-
-        ImGui.End();
     }
 
     private void ComputeCascadeBounds(Camera3D camera, float nearSplit, float farSplit, out Vector3 center, out float radius)

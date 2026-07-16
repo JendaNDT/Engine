@@ -41,6 +41,12 @@ public sealed class LightPanel
     public void Draw()
     {
         ImGui.Begin("Svetlo & Efekty");
+        DrawInner();
+        ImGui.End();
+    }
+
+    public void DrawInner()
+    {
         ImGui.PushItemWidth(-110f);
 
         bool changed = false;
@@ -120,7 +126,6 @@ public sealed class LightPanel
         }
 
         ImGui.PopItemWidth();
-        ImGui.End();
     }
 
     /// <summary>Azimut + vyska -> normalizovany smer OD slunce ke scene.</summary>

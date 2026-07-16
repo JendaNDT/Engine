@@ -31,7 +31,12 @@ public sealed class ProfilerPanel
     public void Draw()
     {
         ImGui.Begin("Profiler (Výkon)");
+        DrawInner();
+        ImGui.End();
+    }
 
+    public void DrawInner()
+    {
         // 1. Sekce: FPS a Čas snímku
         float currentFps = _fpsHistory[HistorySize - 1];
         float currentMs = _msHistory[HistorySize - 1];
@@ -59,8 +64,6 @@ public sealed class ProfilerPanel
         float maxParticles = GetMax(_particleHistory, 100f);
         ImGui.Text($"Aktivní částice: {currentParticles}");
         ImGui.PlotLines("##Particles", ref _particleHistory[0], HistorySize, 0, "", 0f, maxParticles * 1.1f, new System.Numerics.Vector2(-1, 50));
-
-        ImGui.End();
     }
 
     private static float GetMax(float[] history, float defaultMax)

@@ -265,3 +265,9 @@ public struct PrefabLink
     public string PrefabPath;
     public string Overrides; // JSON string s přepsanými vlastnostmi
 }
+
+public struct BehaviorGraphComponent
+{
+    public bool Enabled;
+    public string GraphJson; // Serializovaná data grafu
+}

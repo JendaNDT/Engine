@@ -133,12 +133,16 @@ public sealed class InspectorPanel
     public void Draw(EditorSelection selection)
     {
         ImGui.Begin("Inspector");
+        DrawInner(selection);
+        ImGui.End();
+    }
 
+    public void DrawInner(EditorSelection selection)
+    {
         int e = selection.EntityIndex;
         if (e < 0 || !_transforms.Has(e))
         {
             ImGui.TextDisabled("Nic nevybrano");
-            ImGui.End();
             return;
         }
 
@@ -837,7 +841,6 @@ public sealed class InspectorPanel
         }
 
         ImGui.PopItemWidth();
-        ImGui.End();
     }
 
     private static float Deg2Rad(float deg) => deg * MathF.PI / 180f;
