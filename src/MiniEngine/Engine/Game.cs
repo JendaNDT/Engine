@@ -115,24 +115,40 @@ public sealed class Game : IDisposable
         rlImGui.Setup(darkTheme: true, enableDocking: true);
 
         // Načtení vlastního písma s podporou českých znaků (Latin Extended-A)
-        unsafe
+        try
         {
-            ushort[] ranges = new ushort[]
+            var ioPtr = ImGui.GetIO();
+            string fontPath = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "Roboto-Regular.ttf");
+            if (File.Exists(fontPath))
             {
-                0x0020, 0x00FF, // Basic Latin + Latin-1 Supplement
-                0x0100, 0x017F, // Latin Extended-A (čeština - ěščřž atd.)
-                0
-            };
-            fixed (ushort* p = ranges)
-            {
-                var ioPtr = ImGui.GetIO();
-                string fontPath = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "Roboto-Regular.ttf");
-                if (File.Exists(fontPath))
+                // Vyčistíme výchozí fonty, aby se náš font stal prvním a tedy výchozím
+                ioPtr.Fonts.Clear();
+
+                // Alokujeme pole rozsahů na nemanaged haldě, aby ukazatel přežil
+                ushort[] ranges = new ushort[]
                 {
-                    ioPtr.Fonts.AddFontFromFileTTF(fontPath, 16f, null, (IntPtr)p);
-                    rlImGui.ReloadFonts();
+                    0x0020, 0x00FF, // Basic Latin + Latin-1 Supplement
+                    0x0100, 0x017F, // Latin Extended-A (čeština - ěščřž atd.)
+                    0
+                };
+                int bytesCount = ranges.Length * sizeof(ushort);
+                IntPtr nativeRanges = System.Runtime.InteropServices.Marshal.AllocHGlobal(bytesCount);
+                unsafe
+                {
+                    fixed (ushort* src = ranges)
+                    {
+                        byte* dest = (byte*)nativeRanges.ToPointer();
+                        System.Buffer.MemoryCopy(src, dest, bytesCount, bytesCount);
+                    }
                 }
+
+                ioPtr.Fonts.AddFontFromFileTTF(fontPath, 16f, null, nativeRanges);
+                rlImGui.ReloadFonts();
             }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Chyba načítání písma: {ex.Message}");
         }
 
         MiniEngine.Editor.ImGuiTheme.ApplyDarkTheme();
