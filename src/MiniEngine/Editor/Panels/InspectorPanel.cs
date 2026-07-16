@@ -19,6 +19,8 @@ public sealed class InspectorPanel
     private readonly Store<AudioSourceComponent> _audioSources;
     private readonly Store<BehaviorComponent> _behaviors;
 
+    public Action? OnFocus;
+
     private string[] _availableTextures = [];
     private string[] _availableAudioClips = [];
 
@@ -123,6 +125,14 @@ public sealed class InspectorPanel
         // --- Transform ---
         ImGui.Separator();
         ImGui.Text("Transform");
+        if (OnFocus != null)
+        {
+            ImGui.SameLine(ImGui.GetWindowWidth() - 110f);
+            if (ImGui.Button("Focus"))
+            {
+                OnFocus.Invoke();
+            }
+        }
 
         ref var t = ref _transforms.Get(e);
 

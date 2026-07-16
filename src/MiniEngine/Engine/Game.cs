@@ -111,6 +111,7 @@ public sealed class Game : IDisposable
         _camera = new EditorCamera();
         _hierarchy = new HierarchyPanel(_world);
         _inspector = new InspectorPanel(_world);
+        _inspector.OnFocus = FocusSelection;
         _lightPanel = new LightPanel(_lighting, _viewport.PostProcessor);
         _drawSceneCached = DrawScene;
         _viewport.DrawToolbar = DrawViewportToolbar;   // jednou, ne per frame (delegat)
