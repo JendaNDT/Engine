@@ -142,6 +142,8 @@ public sealed class EditorViewport : IDisposable
         Hovered = ImGui.IsItemHovered();
         Origin = ImGui.GetItemRectMin();
 
+        DrawHelpOverlay();
+
         ImGui.End();
         ImGui.PopStyleVar();
 
@@ -167,6 +169,56 @@ public sealed class EditorViewport : IDisposable
         // pod prejizdejicim kurzorem rozsvecovaly a reagovaly.
         if (Captured) io.ConfigFlags |= ImGuiConfigFlags.NoMouse;
         else io.ConfigFlags &= ~ImGuiConfigFlags.NoMouse;
+    }
+
+    private bool _showHelp = true;
+
+    private void DrawHelpOverlay()
+    {
+        Vector2 padding = new Vector2(10, 10);
+        Vector2 windowPos = Origin + new Vector2(_width - padding.X, padding.Y);
+        
+        ImGui.SetNextWindowPos(windowPos, ImGuiCond.Always, new Vector2(1.0f, 0.0f));
+        ImGui.SetNextWindowBgAlpha(0.75f);
+        
+        ImGuiWindowFlags flags = ImGuiWindowFlags.NoTitleBar |
+                                 ImGuiWindowFlags.NoResize |
+                                 ImGuiWindowFlags.AlwaysAutoResize |
+                                 ImGuiWindowFlags.NoMove |
+                                 ImGuiWindowFlags.NoSavedSettings |
+                                 ImGuiWindowFlags.NoFocusOnAppearing |
+                                 ImGuiWindowFlags.NoNav;
+
+        if (ImGui.Begin("ViewportHelpOverlay", flags))
+        {
+            if (_showHelp)
+            {
+                ImGui.TextColored(new Vector4(0.24f, 0.55f, 0.95f, 1f), "Ovládání & Klávesové zkratky");
+                ImGui.Separator();
+                
+                ImGui.Text("Pravá myš + WASD: Let kamerou (Shift = turbo)");
+                ImGui.Text("Alt + Levá myš:   Rozhlížení");
+                ImGui.Text("Kolečko myši:     Přiblížení / Zoom");
+                ImGui.Text("W / E / R:        Režim Gizma (Posun/Rotace/Měřítko)");
+                ImGui.Text("F:                Focus kamery na vybraný objekt");
+                ImGui.Text("Cmd+D / Ctrl+D:   Duplikovat vybraný objekt");
+                ImGui.Text("Delete:           Smazat vybraný objekt");
+                
+                ImGui.Separator();
+                if (ImGui.Button("Skrýt nápovědu"))
+                {
+                    _showHelp = false;
+                }
+            }
+            else
+            {
+                if (ImGui.Button("?"))
+                {
+                    _showHelp = true;
+                }
+            }
+            ImGui.End();
+        }
     }
 
     /// <summary>Klavesove zkratky enginu smi bezet jen kdyz ImGui nezere klavesnici (psani do inspektoru).</summary>
