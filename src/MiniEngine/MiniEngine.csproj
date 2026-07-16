@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>MiniEngine</RootNamespace>
+
+    <!-- AOT neumi cross-OS kompilaci: win-x64 se buildi na Windows, osx-arm64 na Macu. -->
+    <RuntimeIdentifiers>win-x64;osx-arm64</RuntimeIdentifiers>
+
+    <!-- Debug/vyvoj = JIT (rychly rebuild, plna reflexe).
+         AOT se zapina jen v Release, aby ti nezdrzoval iterace. -->
+    <PublishAot Condition="'$(Configuration)' == 'Release'">true</PublishAot>
+    <StripSymbols Condition="'$(Configuration)' == 'Release'">true</StripSymbols>
+    <InvariantTimezone>true</InvariantTimezone>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- POZOR: rlImgui-cs 3.2.0 je stavene proti Raylib-cs 7.x.
+         Raylib-cs 8.0.0 (nativni raylib 6.0) s nim NENI overene kompatibilni.
+         Az rlImgui-cs vyda verzi pro raylib 6, muzes povysit obe naraz. -->
+    <PackageReference Include="Raylib-cs" Version="7.0.1" />
+    <PackageReference Include="rlImgui-cs" Version="3.2.0" />
+    <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
+    <PackageReference Include="BepuPhysics" Version="2.4.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Assety se kopiruji vedle exe. PreserveNewest = kopiruje jen zmenene. -->
+    <Content Include="..\..\assets\**\*.*" LinkBase="assets" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Bepu vytvari TypeProcessory pres Activator.CreateInstance - trimmer by je
+         v AOT buildu vyhodil a fyzika by spadla az za behu (ILC warning IL2072
+         pri publish je presne tohle a po tomhle rootu je nemocny, ne nebezpecny).
+         Root cele assembly stoji ~800 kB, fyzika za to stoji. -->
+    <TrimmerRootAssembly Include="BepuPhysics" />
+  </ItemGroup>
+
+</Project>
+
+<!--
+  BUILD / PUBLISH
+
+  Vyvoj:
+    dotnet run
+
+  Publish Windows (na Windows stroji):
+    dotnet publish -c Release -r win-x64
+
+  Publish macOS Apple Silicon (na Macu):
+    dotnet publish -c Release -r osx-arm64
+    codesign - -force -deep -sign - -options runtime bin/Release/net10.0/osx-arm64/publish/MiniEngine
+
+  Vystup obsahuje: MiniEngine(.exe) + raylib.dll/libraylib.dylib + cimgui.dll/libcimgui.dylib.
+  To je v poradku - AOT nelinkuje nativni knihovny staticky, jen kolem nich postavi nativni exe.
+-->

@@ -1,0 +1,19 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Hry chteji workstation GC (kratsi pauzy), ne server GC (vyssi propustnost, delsi pauzy). -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+
+    <!-- Setri ~30 MB ICU dat a je to podminka rozumne velkeho AOT vystupu. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Ukaze VSECHNY trim/AOT warningy, ne jen jeden souhrnny. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+  </PropertyGroup>
+</Project>

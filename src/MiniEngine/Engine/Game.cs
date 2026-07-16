@@ -1,0 +1,664 @@
+using System.Numerics;
+using BepuPhysics;
+using ImGuiNET;
+using MiniEngine.Assets;
+using MiniEngine.Core;
+using MiniEngine.Editor;
+using MiniEngine.Physics;
+using MiniEngine.Rendering;
+using Raylib_cs;
+using rlImGui_cs;
+// Raylib_cs ma taky typ 'Transform' - bez aliasu je odkaz nejednoznacny (CS0104).
+using Transform = MiniEngine.Core.Transform;
+
+namespace MiniEngine.Engine;
+
+public sealed class Game : IDisposable
+{
+    private readonly World _world = new();
+    private readonly AssetManager _assets = new();
+    private readonly TransformSystem _transformSystem = new();
+    private readonly Store<Transform> _transforms;
+    private readonly Store<MeshRenderer> _renderers;
+    private readonly Store<Name> _names;
+    private readonly Store<RigidBodyRef> _bodies;
+
+    // Fyzika bezi jen kdyz je zapnuta tlacitkem. STOP = dispose celeho sveta,
+    // START = novy svet postaveny z aktualnich Transformu. Zadne rucni mazani teles.
+    private PhysicsWorld? _physics;
+
+    /// <summary>Scena se uklada do pracovniho adresare - pri 'dotnet run' je to slozka projektu.</summary>
+    private static string ScenePath => Path.Combine(Environment.CurrentDirectory, "scene.json");
+
+    private EditorViewport _viewport = null!;
+    private EditorCamera _camera = null!;
+
+    private readonly EditorSelection _selection = new();
+    private readonly TransformGizmo _gizmo = new();
+    private bool _gizmoActive;   // gizmo si tento frame vzalo mys - picking nesmi bezet
+    private HierarchyPanel _hierarchy = null!;
+    private InspectorPanel _inspector = null!;
+    private LightPanel _lightPanel = null!;
+
+    // Delegat na DrawScene se MUSI cachovat. 'RenderScene(camera, DrawScene)'
+    // by kazdy frame alokoval novy delegat (64 B/frame v hot pathu).
+    private Action<Camera3D> _drawSceneCached = null!;
+
+    private bool _altLooking;   // prave probiha Alt+tazeni (rozhlizeni)
+
+    // Osvetleni + sdileny mesh/material pro krychle.
+    // Kresleni pres DrawMesh s world matici = krychle konecne respektuji ROTACI
+    // (DrawCubeV ji ignoroval) a dostanou stinovani.
+    private LightingShader _lighting = null!;
+    private Mesh _cubeMesh;
+    private Material _cubeMaterial;
+
+    private long _allocStart;
+    private long _allocPerFrame;
+
+    public Game()
+    {
+        // Store si vytahni JEDNOU, ne per frame (dictionary lookup v hot pathu = zbytecny).
+        _transforms = _world.Store<Transform>();
+        _renderers = _world.Store<MeshRenderer>();
+        _names = _world.Store<Name>();
+        _bodies = _world.Store<RigidBodyRef>();
+    }
+
+    public void Run()
+    {
+        Raylib.SetConfigFlags(ConfigFlags.ResizableWindow | ConfigFlags.Msaa4xHint | ConfigFlags.VSyncHint);
+        Raylib.InitWindow(1600, 900, "MiniEngine");
+        Raylib.SetTargetFPS(0);   // VSync ridi tempo
+
+        rlImGui.Setup(darkTheme: true, enableDocking: true);
+        var io = ImGui.GetIO();
+        io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
+
+        // Okna jdou pretahovat JEN za titulek. Bez tohohle ImGui povazuje obraz sceny
+        // za prazdne pozadi okna a Alt+tazeni (rozhlizeni) odtahne cely Viewport.
+        io.ConfigWindowsMoveFromTitleBarOnly = true;
+
+        _lighting = new LightingShader();
+        _assets.DefaultShader = _lighting.Shader;   // kazdy nacteny model dostane osvetleni
+        _cubeMesh = Raylib.GenMeshCube(1f, 1f, 1f);
+        _cubeMaterial = Raylib.LoadMaterialDefault();
+        _cubeMaterial.Shader = _lighting.Shader;
+
+        _viewport = new EditorViewport();
+        _camera = new EditorCamera();
+        _hierarchy = new HierarchyPanel(_world);
+        _inspector = new InspectorPanel(_world);
+        _lightPanel = new LightPanel(_lighting);
+        _drawSceneCached = DrawScene;
+        _viewport.DrawToolbar = DrawViewportToolbar;   // jednou, ne per frame (delegat)
+        _hierarchy.OnSave = SaveScene;
+        _hierarchy.OnLoad = LoadScene;
+        _hierarchy.OnDuplicate = DuplicateSelected;
+        _hierarchy.OnDelete = DeleteSelected;
+        _hierarchy.OnReparent = ReparentEntity;
+
+        CreateDemoScene();
+        TryLoadTestModel();   // az PO InitWindow - LoadModel nahrava na GPU
+
+        while (!Raylib.WindowShouldClose())
+        {
+            float dt = Raylib.GetFrameTime();
+            _allocStart = GC.GetAllocatedBytesForCurrentThread();
+
+            Update(dt);
+
+            // 1) scena do offscreen textury
+            _viewport.RenderScene(_camera.Camera, _drawSceneCached);
+
+            // Merime alokace jen v Update + RenderScene (tj. v hot pathu enginu).
+            // ImGui panely nize alokuji kvuli string interpolaci - to je OK, kresli se jen v editoru.
+            _allocPerFrame = GC.GetAllocatedBytesForCurrentThread() - _allocStart;
+
+            // 2) editor
+            Raylib.BeginDrawing();
+            Raylib.ClearBackground(new Color(18, 18, 20, 255));
+
+            rlImGui.Begin();
+            ImGui.DockSpaceOverViewport();   // pozn.: overload se mezi verzemi ImGui.NET lisi
+
+            // Vychozi rozlozeni: Hierarchy vlevo, Viewport uprostred, Inspector vpravo, Stats vlevo dole.
+            // FirstUseEver = plati jen dokud okno nema ulozene rozlozeni v imgui.ini.
+            var mainVp = ImGui.GetMainViewport();
+            Vector2 wp = mainVp.WorkPos;
+            Vector2 ws = mainVp.WorkSize;
+            float leftW = MathF.Min(300f, ws.X * 0.20f);
+            float rightW = MathF.Min(360f, ws.X * 0.24f);
+
+            NextWindowRect(new Vector2(wp.X + leftW, wp.Y), new Vector2(ws.X - leftW - rightW, ws.Y));
+            _viewport.DrawPanel();
+            HandleGizmo();     // PRED pickingem - klik na sipku nesmi zmenit vyber
+            HandlePicking();   // hned po DrawPanel - Hovered a Origin jsou cerstvé
+
+            NextWindowRect(new Vector2(wp.X, wp.Y), new Vector2(leftW, ws.Y * 0.58f));
+            _hierarchy.Draw(_selection);
+
+            NextWindowRect(new Vector2(wp.X + ws.X - rightW, wp.Y), new Vector2(rightW, ws.Y * 0.62f));
+            _inspector.Draw(_selection);
+
+            NextWindowRect(new Vector2(wp.X + ws.X - rightW, wp.Y + ws.Y * 0.62f), new Vector2(rightW, ws.Y * 0.38f));
+            _lightPanel.Draw();
+
+            NextWindowRect(new Vector2(wp.X, wp.Y + ws.Y * 0.58f), new Vector2(leftW, ws.Y * 0.42f));
+            DrawStatsPanel();
+
+            rlImGui.End();
+
+            Raylib.EndDrawing();
+        }
+
+        StopPhysics();
+        _assets.Dispose();    // GPU zdroje uvolnit PRED zavrenim okna (vraci materialum default shader)
+        Raylib.UnloadMesh(_cubeMesh);
+        _lighting.Dispose();
+        _viewport.Dispose();
+        rlImGui.Shutdown();
+        Raylib.CloseWindow();
+    }
+
+    private void Update(float dt)
+    {
+        bool altDown = Raylib.IsKeyDown(KeyboardKey.LeftAlt) || Raylib.IsKeyDown(KeyboardKey.RightAlt);
+
+        // Alt+tazeni se po startu "latchne": rozhlizis se, dokud nepustis tlacitko,
+        // i kdyz kurzor mezitim vyjede z viewportu. Start jen nad viewportem.
+        if (_altLooking)
+        {
+            if (Raylib.IsMouseButtonDown(MouseButton.Left))
+                _camera.UpdateLook(Raylib.GetMouseDelta());
+            else
+                _altLooking = false;
+        }
+        else if (!_viewport.Captured && _viewport.Hovered && altDown &&
+                 Raylib.IsMouseButtonPressed(MouseButton.Left))
+        {
+            _altLooking = true;
+        }
+
+        // Rozhlizeni drzenim prave mysi (klasika pro mys s tlacitky).
+        if (_viewport.Captured)
+        {
+            _camera.UpdateLook(Raylib.GetMouseDelta());
+            _camera.AdjustSpeed(Raylib.GetMouseWheelMove());
+        }
+        else if (!_altLooking && _viewport.Hovered)
+        {
+            // Zoom koleckem/trackpadem - bez drzeni cehokoliv.
+            float wheel = Raylib.GetMouseWheelMove();
+            if (wheel != 0)
+                _camera.Zoom(wheel * 1.2f);
+        }
+
+        // Pohyb klavesami funguje vzdy, kdyz je mys nad viewportem (nebo za letu).
+        // Gate pres GameKeyboardAllowed: pri psani do textovych poli se kamera nehybe.
+        if (EditorViewport.GameKeyboardAllowed)
+        {
+            // Cmd (Mac) / Ctrl (Windows) prepina klavesy do "zkratkoveho" rezimu -
+            // Cmd+D nesmi zaroven cukat kamerou doprava (D je i pohyb).
+            bool cmdCtrl = Raylib.IsKeyDown(KeyboardKey.LeftSuper) || Raylib.IsKeyDown(KeyboardKey.RightSuper) ||
+                           Raylib.IsKeyDown(KeyboardKey.LeftControl) || Raylib.IsKeyDown(KeyboardKey.RightControl);
+
+            if ((_viewport.Hovered || _viewport.Captured) && !cmdCtrl)
+                _camera.UpdateMovement(dt);
+
+            if (Raylib.IsKeyPressed(KeyboardKey.R)) _camera.Reset();
+            if (Raylib.IsKeyPressed(KeyboardKey.F)) FocusSelection();
+            if (cmdCtrl && Raylib.IsKeyPressed(KeyboardKey.D)) DuplicateSelected();
+
+            // Rezim gizma jako v Unity, jen na cislicich (pismena zabira pohyb kamery).
+            if (Raylib.IsKeyPressed(KeyboardKey.One)) _gizmo.SetMode(GizmoMode.Translate);
+            if (Raylib.IsKeyPressed(KeyboardKey.Two)) _gizmo.SetMode(GizmoMode.Rotate);
+            if (Raylib.IsKeyPressed(KeyboardKey.Three)) _gizmo.SetMode(GizmoMode.Scale);
+        }
+
+        // Fyzika: fixed timestep + interpolace, tela jsou zdroj pravdy pro Transform.
+        // Fyzika mysli ve WORLD prostoru - u deti v hierarchii se poza prepocita
+        // na lokalni pres rodicovu World matici (z minuleho framu, to je ok).
+        if (_physics is not null)
+        {
+            float alpha = _physics.Step(dt);
+
+            var bodies = _bodies.Span;
+            var bodyEntities = _bodies.Entities;
+            for (int i = 0; i < bodies.Length; i++)
+            {
+                ref var b = ref bodies[i];
+                var (pos, rot) = _physics.GetInterpolated(new BodyHandle(b.BodyHandle), alpha);
+                TransformHierarchy.SetWorldPosition(_transforms, bodyEntities[i], pos);
+                TransformHierarchy.SetWorldRotation(_transforms, bodyEntities[i], rot);
+            }
+        }
+
+        _transformSystem.UpdateWorldMatrices(_transforms);
+    }
+
+    private void StartPhysics()
+    {
+        _physics = new PhysicsWorld();
+
+        // Neviditelna podlaha v urovni gridu, at je kam padat.
+        _physics.AddStaticBox(new Vector3(0f, -0.25f, 0f), new Vector3(400f, 0.5f, 400f));
+
+        // Kazda viditelna entita s rendererem dostane dynamicke telo (box dle meritka).
+        // Poza i rozmer boxu se berou z WORLD prostoru - dite otoceneho rodice
+        // musi spadnout z mista, kde ho realne vidis.
+        // Pozn.: i donut ma box - presna kolizni geometrie modelu je v backlogu.
+        var renderers = _renderers.Span;
+        var entities = _renderers.Entities;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            ref var r = ref renderers[i];
+            if (!r.Visible) continue;
+
+            int idx = entities[i];
+            ref var t = ref _transforms.Get(idx);
+
+            var worldScale = TransformHierarchy.WorldScale(t.World);
+            float mass = MathF.Max(0.1f, worldScale.X * worldScale.Y * worldScale.Z);
+            var handle = _physics.AddDynamicBox(
+                t.World.Translation,
+                TransformHierarchy.WorldRotation(_transforms, idx),
+                worldScale, mass);
+            _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false });
+        }
+    }
+
+    private void StopPhysics()
+    {
+        _physics?.Dispose();
+        _physics = null;
+        _bodies.Clear();   // Transformy zustanou tam, kde tela dopadla
+    }
+
+    private void SaveScene()
+    {
+        try
+        {
+            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _assets);
+            _hierarchy.SceneStatus = "Ulozeno: scene.json";
+        }
+        catch (Exception ex)
+        {
+            _hierarchy.SceneStatus = $"Chyba ukladani: {ex.Message}";
+        }
+    }
+
+    private void LoadScene()
+    {
+        if (!File.Exists(ScenePath))
+        {
+            _hierarchy.SceneStatus = "scene.json neexistuje - nejdriv uloz";
+            return;
+        }
+
+        StopPhysics();   // nacitani za behu fyziky = tela by ukazovala na smazane entity
+
+        try
+        {
+            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _assets);
+            _selection.Clear();
+            _hierarchy.SceneStatus = "Nacteno: scene.json";
+        }
+        catch (Exception ex)
+        {
+            _hierarchy.SceneStatus = $"Chyba nacitani: {ex.Message}";
+        }
+    }
+
+    /// <summary>Prileti kamerou k vybranemu objektu (klavesa F, jako v Unity).</summary>
+    private void FocusSelection()
+    {
+        if (!_selection.HasSelection || !_transforms.Has(_selection.EntityIndex)) return;
+
+        ref var t = ref _transforms.Get(_selection.EntityIndex);
+        var worldScale = TransformHierarchy.WorldScale(t.World);
+        float extent = MathF.Max(worldScale.X, MathF.Max(worldScale.Y, worldScale.Z));
+        _camera.Focus(t.World.Translation, extent * 3f + 2f);
+    }
+
+    /// <summary>Prevesi entitu pod noveho rodice (-1 = koren), world poza zustava.</summary>
+    private void ReparentEntity(int child, int newParent)
+    {
+        if (!TransformHierarchy.Reparent(_transforms, child, newParent))
+            _hierarchy.SceneStatus = "Prevesit nejde (cyklus nebo neplatny cil)";
+    }
+
+    private void DrawViewportToolbar()
+    {
+        GizmoModeButton("Posun (1)", GizmoMode.Translate);
+        ImGui.SameLine();
+        GizmoModeButton("Rotace (2)", GizmoMode.Rotate);
+        ImGui.SameLine();
+        GizmoModeButton("Meritko (3)", GizmoMode.Scale);
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("|");
+        ImGui.SameLine();
+
+        if (_physics is null)
+        {
+            if (ImGui.Button("Fyzika: START")) StartPhysics();
+        }
+        else
+        {
+            if (ImGui.Button("Fyzika: STOP")) StopPhysics();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Reset kamery (R)"))
+            _camera.Reset();
+
+        ImGui.SameLine();
+        if (ImGui.Button("Na vyber (F)"))
+            FocusSelection();
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("1/2/3 = rezim gizma | WASD/sipky = pohyb (Shift rychleji) | Alt+tazeni = rozhlizeni | kolecko = zoom | klik = vyber | Cmd = krok | Cmd+D = duplikat");
+    }
+
+    /// <summary>Tlacitko rezimu gizma - aktivni rezim je zvyraznene.</summary>
+    private void GizmoModeButton(string label, GizmoMode mode)
+    {
+        bool active = _gizmo.Mode == mode;
+        if (active) ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.24f, 0.42f, 0.75f, 1f));
+        if (ImGui.Button(label)) _gizmo.SetMode(mode);
+        if (active) ImGui.PopStyleColor();
+    }
+
+    /// <summary>Bezi uvnitr BeginMode3D. Zadne alokace, zadne LINQ.</summary>
+    private void DrawScene(Camera3D camera)
+    {
+        _lighting.Apply(camera);   // viewPos + parametry slunce do shaderu
+
+        Raylib.DrawGrid(40, 1f);
+
+        var transforms = _transforms.Span;
+        var renderers = _renderers.Span;
+        var entities = _renderers.Entities;
+
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            ref var r = ref renderers[i];
+            if (!r.Visible) continue;
+
+            ref var t = ref _transforms.Get(entities[i]);
+            bool selected = entities[i] == _selection.EntityIndex;
+
+            // Zlute ohraniceni vyberu z WORLD pozy - dite v hierarchii ma
+            // v t.Position jen LOKALNI souradnice vuci rodici.
+            Vector3 selPos = t.World.Translation;
+            Vector3 selScale = selected ? TransformHierarchy.WorldScale(t.World) : default;
+
+            if (r.ModelHandle >= 0)
+            {
+                // POZOR: System.Numerics je row-major, raylib cte matici column-major.
+                // Pred predanim do raylib API se MUSI transponovat, jinak se model
+                // projektivne zdeformuje (overeno na Macu 16. 7. 2026 - obri placka).
+                var world = Matrix4x4.Transpose(t.World);
+
+                ref Model m = ref _assets.Get(r.ModelHandle);
+                unsafe
+                {
+                    for (int mi = 0; mi < m.MeshCount; mi++)
+                        Raylib.DrawMesh(m.Meshes[mi], m.Materials[m.MeshMaterial[mi]], world);
+                }
+
+                if (selected)
+                    Raylib.DrawCubeWiresV(selPos, selScale * 2.4f, Color.Yellow);
+            }
+            else
+            {
+                // Krychle pres sdileny mesh + world matici: stinovani i rotace.
+                var color = new Color((byte)(r.Tint.X * 255), (byte)(r.Tint.Y * 255), (byte)(r.Tint.Z * 255), (byte)255);
+                unsafe
+                {
+                    _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Color = color;
+                }
+                Raylib.DrawMesh(_cubeMesh, _cubeMaterial, Matrix4x4.Transpose(t.World));
+
+                if (selected)
+                    Raylib.DrawCubeWiresV(selPos, selScale * 1.08f, Color.Yellow);
+            }
+        }
+
+        // Gizmo az PO objektech (kresli se pres ne, s vypnutym depth testem).
+        // Za behu fyziky se nekresli - stejna podminka jako v HandleGizmo.
+        if (_physics is null && _selection.HasSelection && _transforms.Has(_selection.EntityIndex))
+            _gizmo.Draw(_transforms, _selection.EntityIndex, camera);
+    }
+
+    /// <summary>
+    /// Interakce s translate gizmem. Vola se hned po DrawPanel (cerstve Hovered/Origin)
+    /// a PRED HandlePicking - kdyz klik chytne sipku, picking uz nesmi menit vyber.
+    /// </summary>
+    private void HandleGizmo()
+    {
+        _gizmoActive = false;
+
+        // Za behu fyziky gizmo nejede - Transformy ridi fyzikalni tela,
+        // rucni posun by fyzika okamzite prepsala.
+        if (_physics is not null || !_selection.HasSelection || !_transforms.Has(_selection.EntityIndex))
+        {
+            _gizmo.CancelDrag();
+            return;
+        }
+
+        bool altDown = Raylib.IsKeyDown(KeyboardKey.LeftAlt) || Raylib.IsKeyDown(KeyboardKey.RightAlt);
+        bool canStartDrag = _viewport.Hovered && !_viewport.Captured && !_altLooking && !altDown;
+
+        _gizmoActive = _gizmo.UpdateInteraction(_transforms, _selection.EntityIndex,
+            _viewport.GetPickRay(_camera.Camera), _camera.Camera, canStartDrag);
+
+        // Rotace gizmem meni kvaternion mimo Inspector - jeho euler cache by jinak
+        // ukazovala stare hodnoty, dokud neprepnes vyber (znamy bug ze statusu).
+        if (_gizmo.Dragging && _gizmo.Mode == GizmoMode.Rotate)
+            _inspector.InvalidateRotationCache();
+    }
+
+    /// <summary>
+    /// Duplikuje vybranou entitu (Transform + MeshRenderer + Name s priponou „kopie").
+    /// Kopie se posune o kus vedle a rovnou se vybere, at se da hned tahnout gizmem.
+    /// Cmd+D / Ctrl+D nebo tlacitko v Hierarchy.
+    /// </summary>
+    private void DuplicateSelected()
+    {
+        if (!_selection.HasSelection || !_transforms.Has(_selection.EntityIndex)) return;
+
+        int src = _selection.EntityIndex;
+        var e = _world.Create();
+
+        var t = _transforms.Get(src);            // kopie structu (Get vraci ref, prirazeni kopiruje)
+        t.Position += new Vector3(0.75f, 0f, 0.75f);
+        _world.Add(e, t);
+
+        if (_renderers.Has(src))
+        {
+            var r = _renderers.Get(src);
+            // Handle je refcountovany - bez AddRef by pozdejsi dvoji Release
+            // (napr. pri nacteni sceny) model uvolnil DVAKRAT -> nativni pad.
+            if (r.ModelHandle >= 0) _assets.AddRef(r.ModelHandle);
+            _world.Add(e, r);
+        }
+
+        string baseName = _names.Has(src) ? _names.Get(src).Value : $"Entita {src}";
+        _world.Add(e, new Name { Value = $"{baseName} kopie" });
+
+        _selection.EntityIndex = e.Index;
+    }
+
+    /// <summary>
+    /// Smaze vybranou entitu. Model handle se musi uvolnit (refcount), jinak zustane viset v pameti.
+    /// Deti se NEmazou - prevesi se na prarodice (world poza zustava). Kdyby zustaly
+    /// viset na smazanem indexu, po recyklaci indexu by se pripojily k cizi entite.
+    /// </summary>
+    private void DeleteSelected()
+    {
+        if (!_selection.HasSelection || !_transforms.Has(_selection.EntityIndex)) return;
+
+        int idx = _selection.EntityIndex;
+        int grandparent = _transforms.Get(idx).Parent;   // -1, kdyz mazany je root
+
+        var entities = _transforms.Entities;
+        for (int i = 0; i < entities.Length; i++)
+        {
+            int e = entities[i];
+            if (e != idx && _transforms.Get(e).Parent == idx)
+                TransformHierarchy.Reparent(_transforms, e, grandparent);
+        }
+
+        if (_renderers.Has(idx))
+        {
+            ref var r = ref _renderers.Get(idx);
+            if (r.ModelHandle >= 0) _assets.Release(r.ModelHandle);
+        }
+
+        _world.Destroy(_world.EntityFromIndex(idx));
+        _selection.Clear();
+        _gizmo.CancelDrag();
+    }
+
+    /// <summary>
+    /// Vyber entity klikem do viewportu. Paprsek z mysi se testuje proti vsem
+    /// viditelnym entitam, nejblizsi zasah vyhrava. Klik do prazdna = odznacit.
+    /// U placeholder krychli staci AABB (BoundingBox), u modelu presny test
+    /// proti trojuhelnikum (GetRayCollisionMesh) - klik na diru donutu neproleze.
+    /// </summary>
+    private void HandlePicking()
+    {
+        if (_gizmoActive || _gizmo.Dragging) return;   // tazeni/chyceni sipky neni vyber
+        if (!_viewport.Hovered || _viewport.Captured) return;
+        if (!Raylib.IsMouseButtonPressed(MouseButton.Left)) return;
+
+        // Alt+klik je zacatek rozhlizeni, ne vyber.
+        if (_altLooking) return;
+        if (Raylib.IsKeyDown(KeyboardKey.LeftAlt) || Raylib.IsKeyDown(KeyboardKey.RightAlt)) return;
+
+        Ray ray = _viewport.GetPickRay(_camera.Camera);
+
+        float best = float.MaxValue;
+        int bestEntity = -1;
+
+        var renderers = _renderers.Span;
+        var entities = _renderers.Entities;
+
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            ref var r = ref renderers[i];
+            if (!r.Visible) continue;
+
+            ref var t = ref _transforms.Get(entities[i]);
+            RayCollision hit;
+
+            if (r.ModelHandle >= 0)
+            {
+                // Stejna transpozice jako pri kresleni - raylib je column-major.
+                var world = Matrix4x4.Transpose(t.World);
+
+                ref Model m = ref _assets.Get(r.ModelHandle);
+                hit = default;
+                unsafe
+                {
+                    for (int mi = 0; mi < m.MeshCount; mi++)
+                    {
+                        var h = Raylib.GetRayCollisionMesh(ray, m.Meshes[mi], world);
+                        if (h.Hit && (!hit.Hit || h.Distance < hit.Distance))
+                            hit = h;
+                    }
+                }
+            }
+            else
+            {
+                // AABB kolem krychle z WORLD pozy (dite ma v Position lokalni souradnice).
+                // Rotaci ignoruje - pro placeholder OK.
+                var half = TransformHierarchy.WorldScale(t.World) * 0.5f;
+                var center = t.World.Translation;
+                hit = Raylib.GetRayCollisionBox(ray, new BoundingBox(center - half, center + half));
+            }
+
+            if (hit.Hit && hit.Distance < best)
+            {
+                best = hit.Distance;
+                bestEntity = entities[i];
+            }
+        }
+
+        _selection.EntityIndex = bestEntity;
+    }
+
+    private static void NextWindowRect(Vector2 pos, Vector2 size)
+    {
+        ImGui.SetNextWindowPos(pos, ImGuiCond.FirstUseEver);
+        ImGui.SetNextWindowSize(size, ImGuiCond.FirstUseEver);
+    }
+
+    private void DrawStatsPanel()
+    {
+        ImGui.Begin("Stats");
+        ImGui.Text($"FPS: {Raylib.GetFPS()}");
+        ImGui.Text($"Entity: {_transforms.Count}");
+        ImGui.Text($"Viewport: {_viewport.Width}x{_viewport.Height}");
+        ImGui.Text($"Kamera: {(_viewport.Captured ? "ZACHYCENA (prava mys)" : "volna")}");
+
+        // Nejuzitecnejsi debug radek v celem enginu.
+        // Jakmile tu naskoci nenulove cislo, prave jsi neco alokoval v herni smycce.
+        ImGui.Separator();
+        ImGui.Text($"Alokace/frame (Update+Render): {_allocPerFrame} B");
+        if (_allocPerFrame > 0)
+            ImGui.TextColored(new Vector4(1, 0.4f, 0.2f, 1), "^ nekdo alokuje v hot pathu");
+
+        ImGui.End();
+    }
+
+    private void CreateDemoScene()
+    {
+        var rng = new Random(42);
+        for (int i = 0; i < 200; i++)
+        {
+            var e = _world.Create();
+
+            var t = Transform.Identity;
+            t.Position = new Vector3(
+                (float)(rng.NextDouble() * 40 - 20),
+                (float)(rng.NextDouble() * 6),
+                (float)(rng.NextDouble() * 40 - 20));
+            t.Scale = Vector3.One * (float)(0.5 + rng.NextDouble());
+            _world.Add(e, t);
+
+            _world.Add(e, new MeshRenderer
+            {
+                ModelHandle = -1,
+                Tint = new Vector3((float)rng.NextDouble(), (float)rng.NextDouble(), (float)rng.NextDouble()),
+                Visible = true
+            });
+
+            _world.Add(e, new Name { Value = $"Krychle {e.Index}" });
+        }
+    }
+
+    /// <summary>
+    /// Nacte assets/models/test.glb, pokud existuje. Cesta se resi od exe
+    /// (AppContext.BaseDirectory), ne od pracovniho adresare - 'dotnet run'
+    /// i dvojklik na exe pak najdou assety stejne.
+    /// </summary>
+    private void TryLoadTestModel()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "assets", "models", "test.glb");
+        if (!File.Exists(path)) return;
+
+        int handle = _assets.LoadModel(path);
+
+        var e = _world.Create();
+        var t = Transform.Identity;
+        t.Position = new Vector3(0f, 2f, 0f);
+        _world.Add(e, t);
+        _world.Add(e, new MeshRenderer { ModelHandle = handle, Tint = Vector3.One, Visible = true });
+        _world.Add(e, new Name { Value = "Donut (test.glb)" });
+    }
+
+    public void Dispose() { }
+}

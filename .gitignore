@@ -1,0 +1,11 @@
+# Build vystupy
+[Bb]in/
+[Oo]bj/
+out/
+
+# Lokalni / editorem generovane soubory (kazdy stroj si dela vlastni)
+imgui.ini
+scene.json
+
+# macOS
+.DS_Store
