@@ -108,22 +108,29 @@ public sealed class EditorViewport : IDisposable
         // Draw HUD overlay on top of the image
         if (DrawToolbar is not null)
         {
-            Vector2 backupPos = ImGui.GetCursorPos();
-            ImGui.SetCursorScreenPos(screenPos + new Vector2(10, 10));
+            ImGui.SetNextWindowPos(screenPos + new Vector2(10, 10));
+            ImGui.SetNextWindowSize(new Vector2(avail.X - 20, 36f));
+            ImGui.SetNextWindowBgAlpha(0.75f);
             
-            ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.08f, 0.08f, 0.10f, 0.75f));
-            ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 4f);
-            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(8, 6));
+            ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.08f, 0.08f, 0.10f, 1.00f));
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 4f);
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(8, 5));
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
             
-            if (ImGui.BeginChild("ViewportHUD", new Vector2(avail.X - 20, 38f), ImGuiChildFlags.None, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
+            if (ImGui.Begin("ViewportHUD", ImGuiWindowFlags.NoTitleBar | 
+                                           ImGuiWindowFlags.NoResize | 
+                                           ImGuiWindowFlags.NoMove | 
+                                           ImGuiWindowFlags.NoScrollbar | 
+                                           ImGuiWindowFlags.NoSavedSettings | 
+                                           ImGuiWindowFlags.NoFocusOnAppearing | 
+                                           ImGuiWindowFlags.NoDocking))
             {
                 DrawToolbar();
-                ImGui.EndChild();
+                ImGui.End();
             }
             
-            ImGui.PopStyleVar(2);
+            ImGui.PopStyleVar(3);
             ImGui.PopStyleColor();
-            ImGui.SetCursorPos(backupPos);
         }
 
         if (ImGui.BeginDragDropTarget())
