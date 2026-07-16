@@ -19,6 +19,9 @@ public sealed class InspectorPanel
     private readonly Store<AudioSourceComponent> _audioSources;
     private readonly Store<BehaviorComponent> _behaviors;
 
+    private string[] _availableTextures = [];
+    private string[] _availableAudioClips = [];
+
     // Euler cache plati jen pro entitu, pro kterou byla spocitana.
     private int _eulerEntity = -1;
     private Vector3 _eulerDeg;
@@ -37,6 +40,53 @@ public sealed class InspectorPanel
         _emitters = world.Store<ParticleEmitter>();
         _audioSources = world.Store<AudioSourceComponent>();
         _behaviors = world.Store<BehaviorComponent>();
+
+        ScanAssets();
+    }
+
+    public void ScanAssets()
+    {
+        string texturesDir = Path.Combine(AppContext.BaseDirectory, "assets", "textures");
+        if (Directory.Exists(texturesDir))
+        {
+            var files = Directory.GetFiles(texturesDir, "*.*", SearchOption.AllDirectories);
+            var list = new System.Collections.Generic.List<string>();
+            foreach (var f in files)
+            {
+                string ext = Path.GetExtension(f).ToLower();
+                if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")
+                {
+                    string rel = Path.GetRelativePath(Path.Combine(AppContext.BaseDirectory, "assets"), f);
+                    list.Add(rel);
+                }
+            }
+            _availableTextures = list.ToArray();
+        }
+        else
+        {
+            _availableTextures = [];
+        }
+
+        string audioDir = Path.Combine(AppContext.BaseDirectory, "assets", "audio");
+        if (Directory.Exists(audioDir))
+        {
+            var files = Directory.GetFiles(audioDir, "*.*", SearchOption.AllDirectories);
+            var list = new System.Collections.Generic.List<string>();
+            foreach (var f in files)
+            {
+                string ext = Path.GetExtension(f).ToLower();
+                if (ext == ".wav" || ext == ".ogg" || ext == ".mp3")
+                {
+                    string rel = Path.GetRelativePath(Path.Combine(AppContext.BaseDirectory, "assets"), f);
+                    list.Add(rel);
+                }
+            }
+            _availableAudioClips = list.ToArray();
+        }
+        else
+        {
+            _availableAudioClips = [];
+        }
     }
 
     public void Draw(EditorSelection selection)
@@ -53,6 +103,13 @@ public sealed class InspectorPanel
 
         // Sirka poli: nech 110 px vpravo na popisky, jinak se oriznou mimo okno.
         ImGui.PushItemWidth(-110f);
+
+        if (ImGui.Button("Obnovit assety (Znovu načíst)"))
+        {
+            ScanAssets();
+        }
+        ImGui.SameLine();
+        ImGui.TextDisabled($"[Tex: {_availableTextures.Length}, Aud: {_availableAudioClips.Length}]");
 
         // --- Nazev ---
         if (_names.Has(e))
@@ -96,10 +153,17 @@ public sealed class InspectorPanel
             ImGui.Checkbox("Viditelny", ref r.Visible);
             ImGui.ColorEdit3("Barva", ref r.Tint);
 
-            string texPath = r.AlbedoTexturePath ?? "";
-            if (ImGui.InputText("Textura", ref texPath, 256))
+            string currentTex = r.AlbedoTexturePath ?? "";
+            int selectedIdx = Array.IndexOf(_availableTextures, currentTex);
+
+            string[] comboItems = new string[_availableTextures.Length + 1];
+            comboItems[0] = "(Žádná textura)";
+            Array.Copy(_availableTextures, 0, comboItems, 1, _availableTextures.Length);
+
+            int comboSelect = selectedIdx + 1; // 0 = Zadne
+            if (ImGui.Combo("Textura", ref comboSelect, comboItems, comboItems.Length))
             {
-                r.AlbedoTexturePath = texPath;
+                r.AlbedoTexturePath = comboSelect == 0 ? "" : comboItems[comboSelect];
             }
         }
 
@@ -180,10 +244,17 @@ public sealed class InspectorPanel
             ref var source = ref _audioSources.Get(e);
             ImGui.Checkbox("Aktivni (Prehravat)", ref source.Active);
 
-            string pathBuf = source.ClipPath ?? "";
-            if (ImGui.InputText("Zvukovy soubor", ref pathBuf, 256))
+            string currentClip = source.ClipPath ?? "";
+            int selectedIdx = Array.IndexOf(_availableAudioClips, currentClip);
+
+            string[] comboItems = new string[_availableAudioClips.Length + 1];
+            comboItems[0] = "(Žádný zvuk)";
+            Array.Copy(_availableAudioClips, 0, comboItems, 1, _availableAudioClips.Length);
+
+            int comboSelect = selectedIdx + 1; // 0 = Zadne
+            if (ImGui.Combo("Zvukový soubor", ref comboSelect, comboItems, comboItems.Length))
             {
-                source.ClipPath = pathBuf;
+                source.ClipPath = comboSelect == 0 ? "" : comboItems[comboSelect];
             }
 
             ImGui.SliderFloat("Hlasitost", ref source.Volume, 0f, 1f);
