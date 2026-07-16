@@ -62,6 +62,8 @@ public sealed class LightPanel
             ImGui.SliderFloat("Intenzita Bloom", ref _postProcessing.BloomIntensity, 0f, 2f, "%.2f");
             ImGui.SliderFloat("Jasovy prah Bloom", ref _postProcessing.BloomThreshold, 0.1f, 1.0f, "%.2f");
             ImGui.SliderFloat("Sila Vignette", ref _postProcessing.VignettePower, 0f, 1f, "%.2f");
+            ImGui.SliderFloat("Saturace barev", ref _postProcessing.Saturation, 0f, 2f, "%.2f");
+            ImGui.SliderFloat("Kontrast obrazu", ref _postProcessing.Contrast, 0.5f, 2.0f, "%.2f");
         }
 
         ImGui.Spacing();
@@ -78,6 +80,8 @@ public sealed class LightPanel
             _postProcessing.BloomIntensity = 0.6f;
             _postProcessing.BloomThreshold = 0.7f;
             _postProcessing.VignettePower = 0.3f;
+            _postProcessing.Saturation = 1.0f;
+            _postProcessing.Contrast = 1.0f;
             
             UpdateDirection();
         }

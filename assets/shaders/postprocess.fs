@@ -7,8 +7,21 @@ uniform sampler2D texture0;
 uniform float bloomIntensity;
 uniform float bloomThreshold;
 uniform float vignettePower;
+uniform float saturation;
+uniform float contrast;
 
 out vec4 finalColor;
+
+// Narkowicz ACES aproximace pro filmové mapování tónů (HDR -> LDR)
+vec3 ACESFilm(vec3 x)
+{
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
 
 void main()
 {
@@ -47,7 +60,19 @@ void main()
     
     vec3 result = baseColor.rgb + glowColor * bloomIntensity;
     
-    // 2. Vignette (zatmavení okrajů)
+    // 2. ACES Tonemapping
+    result = ACESFilm(result);
+    
+    // 3. Kontrast
+    result = (result - vec3(0.5)) * contrast + vec3(0.5);
+    result = clamp(result, 0.0, 1.0);
+    
+    // 4. Saturace
+    float luma = dot(result, vec3(0.2126, 0.7152, 0.0722));
+    result = mix(vec3(luma), result, saturation);
+    result = clamp(result, 0.0, 1.0);
+    
+    // 5. Vignette (zatmavení okrajů)
     vec2 uv = fragTexCoord - vec2(0.5);
     float dist = length(uv);
     float vignette = smoothstep(0.8, 0.5 - vignettePower * 0.45, dist);
