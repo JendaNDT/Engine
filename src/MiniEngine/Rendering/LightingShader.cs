@@ -19,6 +19,13 @@ public sealed class LightingShader : IDisposable
     private int _locAmbient;
     private int _locSpec;
 
+    // Shadow Mapping
+    public uint ShadowFboId;
+    public Texture2D ShadowMapTexture;
+    public Matrix4x4 LightMvp;
+    private int _locMvpLight;
+    private int _locShadowMap;
+
     // Vychozi hodnoty ztlumene, at sceny nejsou prepalene (puvodni donut svitil do zluta).
     public Vector3 SunDirection = Vector3.Normalize(new Vector3(-0.5f, -1f, -0.35f));
     public Vector3 SunColor = new(1.00f, 0.95f, 0.88f);
@@ -37,6 +44,23 @@ public sealed class LightingShader : IDisposable
         Shader = Raylib.LoadShader(
             Path.Combine(dir, "lighting.vs"),
             Path.Combine(dir, "lighting.fs"));
+
+        // Inicializace stinové mapy
+        ShadowMapTexture = new Texture2D
+        {
+            Id = Rlgl.LoadTextureDepth(2048, 2048, false),
+            Width = 2048,
+            Height = 2048,
+            Mipmaps = 1,
+            Format = PixelFormat.UncompressedR32
+        };
+        ShadowFboId = Rlgl.LoadFramebuffer();
+        Rlgl.FramebufferAttach(
+            ShadowFboId,
+            ShadowMapTexture.Id,
+            FramebufferAttachType.Depth,
+            FramebufferAttachTextureType.Texture2D,
+            0);
 
         LoadLocations();
     }
@@ -69,6 +93,9 @@ public sealed class LightingShader : IDisposable
         _locSunColor = Raylib.GetShaderLocation(Shader, "sunColor");
         _locAmbient = Raylib.GetShaderLocation(Shader, "ambientColor");
         _locSpec = Raylib.GetShaderLocation(Shader, "specStrength");
+
+        _locMvpLight = Raylib.GetShaderLocation(Shader, "mvpLight");
+        _locShadowMap = Raylib.GetShaderLocation(Shader, "shadowMap");
     }
 
     /// <summary>Jednou per frame pred kreslenim sceny.</summary>
@@ -79,7 +106,16 @@ public sealed class LightingShader : IDisposable
         Raylib.SetShaderValue(Shader, _locSunColor, SunColor * SunIntensity, ShaderUniformDataType.Vec3);
         Raylib.SetShaderValue(Shader, _locAmbient, Ambient, ShaderUniformDataType.Vec3);
         Raylib.SetShaderValue(Shader, _locSpec, SpecStrength, ShaderUniformDataType.Float);
+
+        // Stinove uniformy
+        Raylib.SetShaderValueMatrix(Shader, _locMvpLight, LightMvp);
+        Raylib.SetShaderValueTexture(Shader, _locShadowMap, ShadowMapTexture);
     }
 
-    public void Dispose() => Raylib.UnloadShader(Shader);
+    public void Dispose()
+    {
+        Raylib.UnloadShader(Shader);
+        Rlgl.UnloadFramebuffer(ShadowFboId);
+        Rlgl.UnloadTexture(ShadowMapTexture.Id);
+    }
 }

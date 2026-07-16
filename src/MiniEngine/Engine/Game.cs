@@ -132,6 +132,35 @@ public sealed class Game : IDisposable
 
             Update(dt);
 
+            // --- SHADOW PASS ---
+            Camera3D shadowCamera = new Camera3D
+            {
+                Position = -_lighting.SunDirection * 35.0f,
+                Target = Vector3.Zero,
+                Up = new Vector3(0.0f, 1.0f, 0.0f),
+                FovY = 60.0f,
+                Projection = CameraProjection.Orthographic
+            };
+
+            RenderTexture2D shadowMapRT = new RenderTexture2D
+            {
+                Id = _lighting.ShadowFboId,
+                Texture = new Texture2D { Id = 0, Width = 2048, Height = 2048 },
+                Depth = new Texture2D { Id = _lighting.ShadowMapTexture.Id, Width = 2048, Height = 2048 }
+            };
+
+            Raylib.BeginTextureMode(shadowMapRT);
+            Rlgl.ColorMask(false, false, false, false);
+            Rlgl.ClearScreenBuffers();
+            
+            Raylib.BeginMode3D(shadowCamera);
+            _lighting.LightMvp = Rlgl.GetMatrixModelview() * Rlgl.GetMatrixProjection();
+            DrawSceneGeometries();
+            Raylib.EndMode3D();
+            
+            Rlgl.ColorMask(true, true, true, true);
+            Raylib.EndTextureMode();
+
             // 1) scena do offscreen textury
             _viewport.RenderScene(_camera.Camera, _drawSceneCached);
 
@@ -444,12 +473,8 @@ public sealed class Game : IDisposable
     }
 
     /// <summary>Bezi uvnitr BeginMode3D. Zadne alokace, zadne LINQ.</summary>
-    private void DrawScene(Camera3D camera)
+    private void DrawSceneGeometries()
     {
-        _lighting.Apply(camera);   // viewPos + parametry slunce do shaderu
-
-        Raylib.DrawGrid(40, 1f);
-
         var transforms = _transforms.Span;
         var renderers = _renderers.Span;
         var entities = _renderers.Entities;
@@ -460,20 +485,10 @@ public sealed class Game : IDisposable
             if (!r.Visible) continue;
 
             ref var t = ref _transforms.Get(entities[i]);
-            bool selected = entities[i] == _selection.EntityIndex;
-
-            // Zlute ohraniceni vyberu z WORLD pozy - dite v hierarchii ma
-            // v t.Position jen LOKALNI souradnice vuci rodici.
-            Vector3 selPos = t.World.Translation;
-            Vector3 selScale = selected ? TransformHierarchy.WorldScale(t.World) : default;
 
             if (r.ModelHandle >= 0)
             {
-                // POZOR: System.Numerics je row-major, raylib cte matici column-major.
-                // Pred predanim do raylib API se MUSI transponovat, jinak se model
-                // projektivne zdeformuje (overeno na Macu 16. 7. 2026 - obri placka).
                 var world = Matrix4x4.Transpose(t.World);
-
                 ref Model m = ref _assets.Get(r.ModelHandle);
                 unsafe
                 {
@@ -492,22 +507,44 @@ public sealed class Game : IDisposable
                         mat.Maps[(int)MaterialMapIndex.Albedo].Color = origColor;
                     }
                 }
-
-                if (selected)
-                    Raylib.DrawCubeWiresV(selPos, selScale * 2.4f, Color.Yellow);
             }
             else
             {
-                // Krychle pres sdileny mesh + world matici: stinovani i rotace.
                 var color = new Color((byte)(r.Tint.X * 255), (byte)(r.Tint.Y * 255), (byte)(r.Tint.Z * 255), (byte)255);
                 unsafe
                 {
                     _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Color = color;
                 }
                 Raylib.DrawMesh(_cubeMesh, _cubeMaterial, Matrix4x4.Transpose(t.World));
+            }
+        }
+    }
 
-                if (selected)
-                    Raylib.DrawCubeWiresV(selPos, selScale * 1.08f, Color.Yellow);
+    private void DrawScene(Camera3D camera)
+    {
+        _lighting.Apply(camera);   // viewPos + parametry slunce do shaderu
+
+        Raylib.DrawGrid(40, 1f);
+
+        DrawSceneGeometries();
+
+        // Kresleni obrysu (wires) pro vybrane objekty
+        var renderers = _renderers.Span;
+        var entities = _renderers.Entities;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            ref var r = ref renderers[i];
+            if (!r.Visible) continue;
+
+            int idx = entities[i];
+            if (idx == _selection.EntityIndex)
+            {
+                ref var t = ref _transforms.Get(idx);
+                var worldScale = TransformHierarchy.WorldScale(t.World);
+                if (r.ModelHandle >= 0)
+                    Raylib.DrawCubeWiresV(t.World.Translation, worldScale * 2.4f, Color.Yellow);
+                else
+                    Raylib.DrawCubeWiresV(t.World.Translation, worldScale * 1.08f, Color.Yellow);
             }
         }
 
