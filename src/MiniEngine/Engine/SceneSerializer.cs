@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using MiniEngine.Assets;
 using MiniEngine.Core;
 using Transform = MiniEngine.Core.Transform;
+using MiniEngine.Rendering;
 
 namespace MiniEngine.Engine;
 
@@ -16,6 +17,16 @@ namespace MiniEngine.Engine;
 public sealed class SceneData
 {
     public List<EntityData> Entities { get; set; } = [];
+    public LightingSettingsData? Lighting { get; set; }
+}
+
+public sealed class LightingSettingsData
+{
+    public float[] SunDirection { get; set; } = [0, 0, 0];
+    public float[] SunColor { get; set; } = [1, 1, 1];
+    public float SunIntensity { get; set; } = 1.0f;
+    public float[] Ambient { get; set; } = [0.2f, 0.2f, 0.2f];
+    public float SpecStrength { get; set; } = 0.25f;
 }
 
 public sealed class EntityData
@@ -46,7 +57,7 @@ internal partial class SceneJsonContext : JsonSerializerContext { }
 public static class SceneSerializer
 {
     public static void Save(string path, Store<Transform> transforms, Store<MeshRenderer> renderers,
-        Store<Name> names, AssetManager assets)
+        Store<Name> names, AssetManager assets, LightingShader lighting)
     {
         var scene = new SceneData();
         var entityIndexes = transforms.Entities;
@@ -85,14 +96,32 @@ public static class SceneSerializer
             scene.Entities.Add(e);
         }
 
+        scene.Lighting = new LightingSettingsData
+        {
+            SunDirection = [lighting.SunDirection.X, lighting.SunDirection.Y, lighting.SunDirection.Z],
+            SunColor = [lighting.SunColor.X, lighting.SunColor.Y, lighting.SunColor.Z],
+            SunIntensity = lighting.SunIntensity,
+            Ambient = [lighting.Ambient.X, lighting.Ambient.Y, lighting.Ambient.Z],
+            SpecStrength = lighting.SpecStrength
+        };
+
         File.WriteAllText(path, JsonSerializer.Serialize(scene, SceneJsonContext.Default.SceneData));
     }
 
     public static void Load(string path, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
-        Store<Name> names, AssetManager assets)
+        Store<Name> names, AssetManager assets, LightingShader lighting)
     {
         var scene = JsonSerializer.Deserialize(File.ReadAllText(path), SceneJsonContext.Default.SceneData);
         if (scene is null) return;
+
+        if (scene.Lighting is { } l)
+        {
+            lighting.SunDirection = new Vector3(l.SunDirection[0], l.SunDirection[1], l.SunDirection[2]);
+            lighting.SunColor = new Vector3(l.SunColor[0], l.SunColor[1], l.SunColor[2]);
+            lighting.SunIntensity = l.SunIntensity;
+            lighting.Ambient = new Vector3(l.Ambient[0], l.Ambient[1], l.Ambient[2]);
+            lighting.SpecStrength = l.SpecStrength;
+        }
 
         // 1) Smazat soucasnou scenu = vsechno, co ma Transform.
         //    Model handly se uvolni (refcount), GPU pamet nezustane viset.

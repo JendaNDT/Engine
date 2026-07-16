@@ -232,6 +232,8 @@ public sealed class Game : IDisposable
                 TransformHierarchy.SetWorldPosition(_transforms, bodyEntities[i], pos);
                 TransformHierarchy.SetWorldRotation(_transforms, bodyEntities[i], rot);
             }
+
+            _inspector.InvalidateRotationCache();
         }
 
         _transformSystem.UpdateWorldMatrices(_transforms);
@@ -279,7 +281,7 @@ public sealed class Game : IDisposable
     {
         try
         {
-            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _assets);
+            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _assets, _lighting);
             _hierarchy.SceneStatus = "Ulozeno: scene.json";
         }
         catch (Exception ex)
@@ -300,7 +302,8 @@ public sealed class Game : IDisposable
 
         try
         {
-            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _assets);
+            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _assets, _lighting);
+            _lightPanel.LoadFrom(_lighting.SunDirection);
             _selection.Clear();
             _hierarchy.SceneStatus = "Nacteno: scene.json";
         }
@@ -405,7 +408,19 @@ public sealed class Game : IDisposable
                 unsafe
                 {
                     for (int mi = 0; mi < m.MeshCount; mi++)
-                        Raylib.DrawMesh(m.Meshes[mi], m.Materials[m.MeshMaterial[mi]], world);
+                    {
+                        ref var mat = ref m.Materials[m.MeshMaterial[mi]];
+                        Color origColor = mat.Maps[(int)MaterialMapIndex.Albedo].Color;
+
+                        byte rVal = (byte)Math.Clamp(origColor.R * r.Tint.X, 0f, 255f);
+                        byte gVal = (byte)Math.Clamp(origColor.G * r.Tint.Y, 0f, 255f);
+                        byte bVal = (byte)Math.Clamp(origColor.B * r.Tint.Z, 0f, 255f);
+                        mat.Maps[(int)MaterialMapIndex.Albedo].Color = new Color(rVal, gVal, bVal, origColor.A);
+
+                        Raylib.DrawMesh(m.Meshes[mi], mat, world);
+
+                        mat.Maps[(int)MaterialMapIndex.Albedo].Color = origColor;
+                    }
                 }
 
                 if (selected)
@@ -469,26 +484,67 @@ public sealed class Game : IDisposable
     {
         if (!_selection.HasSelection || !_transforms.Has(_selection.EntityIndex)) return;
 
-        int src = _selection.EntityIndex;
-        var e = _world.Create();
+        int rootSrc = _selection.EntityIndex;
 
-        var t = _transforms.Get(src);            // kopie structu (Get vraci ref, prirazeni kopiruje)
-        t.Position += new Vector3(0.75f, 0f, 0.75f);
-        _world.Add(e, t);
+        // 1. Najdeme vsechny potomky vybrane entity
+        var subtree = new System.Collections.Generic.List<int> { rootSrc };
+        var entities = _transforms.Entities;
 
-        if (_renderers.Has(src))
+        for (int i = 0; i < entities.Length; i++)
         {
-            var r = _renderers.Get(src);
-            // Handle je refcountovany - bez AddRef by pozdejsi dvoji Release
-            // (napr. pri nacteni sceny) model uvolnil DVAKRAT -> nativni pad.
-            if (r.ModelHandle >= 0) _assets.AddRef(r.ModelHandle);
-            _world.Add(e, r);
+            int ent = entities[i];
+            if (ent != rootSrc && TransformHierarchy.IsDescendantOf(_transforms, ent, rootSrc))
+            {
+                subtree.Add(ent);
+            }
         }
 
-        string baseName = _names.Has(src) ? _names.Get(src).Value : $"Entita {src}";
-        _world.Add(e, new Name { Value = $"{baseName} kopie" });
+        // 2. Vytvorime kopie vsech entit a ulozime mapovani: stary index -> nova Entity
+        var oldToNew = new System.Collections.Generic.Dictionary<int, Entity>();
+        foreach (int src in subtree)
+        {
+            oldToNew[src] = _world.Create();
+        }
 
-        _selection.EntityIndex = e.Index;
+        // 3. Zkopirujeme komponenty a upravime parenty
+        foreach (int src in subtree)
+        {
+            Entity dest = oldToNew[src];
+
+            // Zkopirujeme Transform
+            var t = _transforms.Get(src); // kopie structu
+
+            // Pro koren podstromu posuneme pozici o kus vedle
+            if (src == rootSrc)
+            {
+                t.Position += new Vector3(0.75f, 0f, 0.75f);
+            }
+            else
+            {
+                // Pro potomky premapujeme parenta na novou kopii parenta
+                if (t.Parent >= 0 && oldToNew.TryGetValue(t.Parent, out Entity newParent))
+                {
+                    t.Parent = newParent.Index;
+                }
+            }
+            _world.Add(dest, t);
+
+            // Zkopirujeme MeshRenderer
+            if (_renderers.Has(src))
+            {
+                var r = _renderers.Get(src);
+                if (r.ModelHandle >= 0) _assets.AddRef(r.ModelHandle);
+                _world.Add(dest, r);
+            }
+
+            // Zkopirujeme Name
+            string baseName = _names.Has(src) ? _names.Get(src).Value : $"Entita {src}";
+            string newName = src == rootSrc ? $"{baseName} kopie" : baseName;
+            _world.Add(dest, new Name { Value = newName });
+        }
+
+        // Vybereme novou kopii korene
+        _selection.EntityIndex = oldToNew[rootSrc].Index;
     }
 
     /// <summary>

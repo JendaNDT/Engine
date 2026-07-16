@@ -24,6 +24,16 @@ public sealed class LightPanel
         UpdateDirection();
     }
 
+    public void LoadFrom(Vector3 dir)
+    {
+        float el = MathF.Asin(Math.Clamp(-dir.Y, -1f, 1f));
+        float az = MathF.Atan2(-dir.Z, -dir.X);
+        if (az < 0) az += 2f * MathF.PI;
+
+        _azimuthDeg = az * 180f / MathF.PI;
+        _elevationDeg = el * 180f / MathF.PI;
+    }
+
     public void Draw()
     {
         ImGui.Begin("Svetlo");
