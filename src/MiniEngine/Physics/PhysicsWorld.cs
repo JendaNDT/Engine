@@ -161,6 +161,22 @@ public sealed class PhysicsWorld : IDisposable
             Quaternion.Slerp(prev.Rot, body.Pose.Orientation, alpha));
     }
 
+    public BodyHandle AddDynamicConvexHull(Vector3 position, Quaternion rotation, Span<Vector3> vertices, float mass, out Vector3 center)
+    {
+        BepuPhysics.Collidables.ConvexHullHelper.CreateShape(vertices, _pool, out center, out var hull);
+        var inertia = hull.ComputeInertia(mass);
+        var index = Simulation.Shapes.Add(hull);
+
+        Vector3 offsetPos = position + Vector3.Transform(center, rotation);
+
+        var handle = Simulation.Bodies.Add(BodyDescription.CreateDynamic(
+            new RigidPose(offsetPos, rotation), inertia,
+            new CollidableDescription(index, 0.1f), new BodyActivityDescription(0.01f)));
+
+        Track(handle);
+        return handle;
+    }
+
     public BodyHandle AddDynamicBox(Vector3 position, Quaternion rotation, Vector3 size, float mass)
     {
         var box = new Box(size.X, size.Y, size.Z);

@@ -253,7 +253,8 @@ public sealed class Game : IDisposable
             {
                 ref var b = ref bodies[i];
                 var (pos, rot) = _physics.GetInterpolated(new BodyHandle(b.BodyHandle), alpha);
-                TransformHierarchy.SetWorldPosition(_transforms, bodyEntities[i], pos);
+                Vector3 visualPos = pos - Vector3.Transform(b.CenterOffset, rot);
+                TransformHierarchy.SetWorldPosition(_transforms, bodyEntities[i], visualPos);
                 TransformHierarchy.SetWorldRotation(_transforms, bodyEntities[i], rot);
             }
 
@@ -287,11 +288,55 @@ public sealed class Game : IDisposable
 
             var worldScale = TransformHierarchy.WorldScale(t.World);
             float mass = MathF.Max(0.1f, worldScale.X * worldScale.Y * worldScale.Z);
-            var handle = _physics.AddDynamicBox(
-                t.World.Translation,
-                TransformHierarchy.WorldRotation(_transforms, idx),
-                worldScale, mass);
-            _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false });
+
+            if (r.ModelHandle >= 0)
+            {
+                ref Model m = ref _assets.Get(r.ModelHandle);
+                var vertexList = new System.Collections.Generic.List<Vector3>();
+
+                unsafe
+                {
+                    for (int mi = 0; mi < m.MeshCount; mi++)
+                    {
+                        ref var mesh = ref m.Meshes[mi];
+                        if (mesh.Vertices != null && mesh.VertexCount > 0)
+                        {
+                            for (int vi = 0; vi < mesh.VertexCount; vi++)
+                            {
+                                float x = mesh.Vertices[vi * 3];
+                                float y = mesh.Vertices[vi * 3 + 1];
+                                float z = mesh.Vertices[vi * 3 + 2];
+                                vertexList.Add(new Vector3(x * worldScale.X, y * worldScale.Y, z * worldScale.Z));
+                            }
+                        }
+                    }
+                }
+
+                if (vertexList.Count > 0)
+                {
+                    var handle = _physics.AddDynamicConvexHull(
+                        t.World.Translation,
+                        TransformHierarchy.WorldRotation(_transforms, idx),
+                        vertexList.ToArray(), mass, out var center);
+                    _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false, CenterOffset = center });
+                }
+                else
+                {
+                    var handle = _physics.AddDynamicBox(
+                        t.World.Translation,
+                        TransformHierarchy.WorldRotation(_transforms, idx),
+                        worldScale, mass);
+                    _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false, CenterOffset = Vector3.Zero });
+                }
+            }
+            else
+            {
+                var handle = _physics.AddDynamicBox(
+                    t.World.Translation,
+                    TransformHierarchy.WorldRotation(_transforms, idx),
+                    worldScale, mass);
+                _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false, CenterOffset = Vector3.Zero });
+            }
         }
     }
 

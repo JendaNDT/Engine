@@ -46,6 +46,7 @@ public struct RigidBodyRef
 {
     public int BodyHandle;   // BepuPhysics.BodyHandle.Value
     public bool IsKinematic;
+    public Vector3 CenterOffset;
 }
 
 /// <summary>
