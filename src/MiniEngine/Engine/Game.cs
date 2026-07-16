@@ -309,14 +309,20 @@ public sealed class Game : IDisposable
             if ((_viewport.Hovered || _viewport.Captured) && !cmdCtrl)
                 _camera.UpdateMovement(dt);
 
-            if (Raylib.IsKeyPressed(KeyboardKey.R)) _camera.Reset();
             if (Raylib.IsKeyPressed(KeyboardKey.F)) FocusSelection();
             if (cmdCtrl && Raylib.IsKeyPressed(KeyboardKey.D)) DuplicateSelected();
 
-            // Rezim gizma jako v Unity, jen na cislicich (pismena zabira pohyb kamery).
-            if (Raylib.IsKeyPressed(KeyboardKey.One)) _gizmo.SetMode(GizmoMode.Translate);
-            if (Raylib.IsKeyPressed(KeyboardKey.Two)) _gizmo.SetMode(GizmoMode.Rotate);
-            if (Raylib.IsKeyPressed(KeyboardKey.Three)) _gizmo.SetMode(GizmoMode.Scale);
+            // Rezim gizma jako v Unity/Unreal (W/E/R, pokud se nerozhlizime kamerou)
+            if (!_viewport.Captured && !_altLooking)
+            {
+                if (Raylib.IsKeyPressed(KeyboardKey.W)) _gizmo.SetMode(GizmoMode.Translate);
+                if (Raylib.IsKeyPressed(KeyboardKey.E)) _gizmo.SetMode(GizmoMode.Rotate);
+                if (Raylib.IsKeyPressed(KeyboardKey.R)) _gizmo.SetMode(GizmoMode.Scale);
+            }
+            else
+            {
+                if (Raylib.IsKeyPressed(KeyboardKey.R)) _camera.Reset();
+            }
         }
 
         // Fyzika: fixed timestep + interpolace, tela jsou zdroj pravdy pro Transform.
@@ -540,11 +546,11 @@ public sealed class Game : IDisposable
 
     private void DrawViewportToolbar()
     {
-        GizmoModeButton("Posun (1)", GizmoMode.Translate);
+        GizmoModeButton("Posun (W)", GizmoMode.Translate);
         ImGui.SameLine();
-        GizmoModeButton("Rotace (2)", GizmoMode.Rotate);
+        GizmoModeButton("Rotace (E)", GizmoMode.Rotate);
         ImGui.SameLine();
-        GizmoModeButton("Meritko (3)", GizmoMode.Scale);
+        GizmoModeButton("Měřítko (R)", GizmoMode.Scale);
 
         ImGui.SameLine();
         ImGui.TextDisabled("|");
@@ -560,15 +566,15 @@ public sealed class Game : IDisposable
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Reset kamery (R)"))
+        if (ImGui.Button("Reset kamery"))
             _camera.Reset();
 
         ImGui.SameLine();
-        if (ImGui.Button("Na vyber (F)"))
+        if (ImGui.Button("Na výběr (F)"))
             FocusSelection();
 
         ImGui.SameLine();
-        ImGui.TextDisabled("1/2/3 = rezim gizma | WASD/sipky = pohyb (Shift rychleji) | Alt+tazeni = rozhlizeni | kolecko = zoom | klik = vyber | Cmd = krok | Cmd+D = duplikat");
+        ImGui.TextDisabled("W/E/R = režim gizma | F = fokus | WASD = let kamery (Shift rychleji) | Alt+tažení = rozhlížení | kolečko = zoom | klik = výběr | Cmd+D = duplikát");
     }
 
     /// <summary>Tlacitko rezimu gizma - aktivni rezim je zvyraznene.</summary>
