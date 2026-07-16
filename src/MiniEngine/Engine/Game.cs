@@ -31,6 +31,8 @@ public sealed class Game : IDisposable
     private readonly BehaviorSystem _behaviorSystem = new();
     private readonly ProfilerPanel _profiler = new();
     private SkyboxRenderer _skybox = null!;
+    private string _assetSearchQuery = "";
+    private int _assetFilterType = 0;
 
     // Fyzika bezi jen kdyz je zapnuta tlacitkem. STOP = dispose celeho sveta,
     // START = novy svet postaveny z aktualnich Transformu. Zadne rucni mazani teles.
@@ -985,7 +987,9 @@ public sealed class Game : IDisposable
             {
                 string rel = Path.GetRelativePath(assetsDir, file);
                 string ext = Path.GetExtension(file).ToLower();
-                if (ext == ".glb" || ext == ".gltf" || ext == ".vs" || ext == ".fs" || ext == ".png")
+                if (ext == ".glb" || ext == ".gltf" || ext == ".vs" || ext == ".fs" ||
+                    ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga" ||
+                    ext == ".wav" || ext == ".ogg" || ext == ".mp3")
                 {
                     _assetFiles.Add(rel);
                 }
@@ -1051,6 +1055,11 @@ public sealed class Game : IDisposable
         ImGui.SameLine();
         ImGui.TextDisabled("Kliknutím na model (.glb) jej spawneš do scény.");
 
+        ImGui.InputText("Hledat", ref _assetSearchQuery, 128);
+
+        string[] filters = ["Vše", "Modely (*.glb/*.gltf)", "Textury (*.png/*.jpg...)", "Zvuky (*.wav/*.ogg...)", "Shadery (*.vs/*.fs)"];
+        ImGui.Combo("Filtr typů", ref _assetFilterType, filters, filters.Length);
+
         ImGui.Separator();
 
         if (ImGui.BeginChild("FilesList"))
@@ -1059,10 +1068,28 @@ public sealed class Game : IDisposable
             {
                 string ext = Path.GetExtension(relPath).ToLower();
                 
+                if (!string.IsNullOrEmpty(_assetSearchQuery) && relPath.IndexOf(_assetSearchQuery, StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                bool matchesFilter = _assetFilterType switch
+                {
+                    0 => true,
+                    1 => ext == ".glb" || ext == ".gltf",
+                    2 => ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga",
+                    3 => ext == ".wav" || ext == ".ogg" || ext == ".mp3",
+                    4 => ext == ".vs" || ext == ".fs",
+                    _ => true
+                };
+
+                if (!matchesFilter) continue;
+
                 string icon = "📄";
                 if (ext == ".glb" || ext == ".gltf") icon = "📦";
                 else if (ext == ".vs" || ext == ".fs") icon = "⚙️";
-                else if (ext == ".png") icon = "🖼️";
+                else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga") icon = "🖼️";
+                else if (ext == ".wav" || ext == ".ogg" || ext == ".mp3") icon = "🎵";
 
                 if (ImGui.Button($"{icon} {relPath}"))
                 {
