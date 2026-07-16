@@ -17,6 +17,7 @@ public sealed class InspectorPanel
     private readonly Store<Name> _names;
     private readonly Store<ParticleEmitter> _emitters;
     private readonly Store<AudioSourceComponent> _audioSources;
+    private readonly Store<BehaviorComponent> _behaviors;
 
     // Euler cache plati jen pro entitu, pro kterou byla spocitana.
     private int _eulerEntity = -1;
@@ -35,6 +36,7 @@ public sealed class InspectorPanel
         _names = world.Store<Name>();
         _emitters = world.Store<ParticleEmitter>();
         _audioSources = world.Store<AudioSourceComponent>();
+        _behaviors = world.Store<BehaviorComponent>();
     }
 
     public void Draw(EditorSelection selection)
@@ -200,6 +202,75 @@ public sealed class InspectorPanel
             if (ImGui.Button("Přidat AudioSource"))
             {
                 _audioSources.Add(e, AudioSourceComponent.Default);
+            }
+        }
+
+        // --- BehaviorComponent ---
+        if (_behaviors.Has(e))
+        {
+            ImGui.Separator();
+            ImGui.Text("Behavior (Skript pohybu)");
+
+            ref var b = ref _behaviors.Get(e);
+            ImGui.Checkbox("Aktivni (Spustit se simulaci)", ref b.Active);
+
+            string[] types = ["Rotátor", "Ping-Pong pohyb", "Obíhač", "Sinusové houpání"];
+            int currentType = b.Type;
+            if (ImGui.Combo("Typ pohybu", ref currentType, types, types.Length))
+            {
+                b.Type = currentType;
+                if (currentType == 0) // Rotator
+                {
+                    b.Axis = Vector3.UnitY;
+                    b.Speed = 1f;
+                }
+                else if (currentType == 1) // Ping-Pong
+                {
+                    b.Axis = Vector3.UnitX;
+                    b.Speed = 2f;
+                    b.Range = 3f;
+                }
+                else if (currentType == 2) // Orbiter
+                {
+                    b.Speed = 1f;
+                    b.Range = 4f;
+                }
+                else if (currentType == 3) // Bobber
+                {
+                    b.Frequency = 0.5f;
+                    b.Range = 1f;
+                }
+            }
+
+            if (b.Type == 0 || b.Type == 1)
+            {
+                ImGui.DragFloat3("Osa pohybu/rotace", ref b.Axis, 0.05f);
+                if (b.Axis != Vector3.Zero) b.Axis = Vector3.Normalize(b.Axis);
+            }
+
+            ImGui.DragFloat("Rychlost", ref b.Speed, 0.05f);
+            
+            if (b.Type == 1 || b.Type == 2 || b.Type == 3)
+            {
+                ImGui.DragFloat("Rozsah (Range)", ref b.Range, 0.05f, 0f, 100f);
+            }
+
+            if (b.Type == 3)
+            {
+                ImGui.DragFloat("Frekvence", ref b.Frequency, 0.01f, 0.01f, 10f);
+            }
+
+            if (ImGui.Button("Odebrat Behavior"))
+            {
+                _behaviors.RemoveAt(e);
+            }
+        }
+        else
+        {
+            ImGui.Separator();
+            if (ImGui.Button("Přidat Behavior"))
+            {
+                _behaviors.Add(e, BehaviorComponent.Default);
             }
         }
 

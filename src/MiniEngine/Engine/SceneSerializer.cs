@@ -39,6 +39,7 @@ public sealed class EntityData
     public MeshRendererData? MeshRenderer { get; set; }
     public ParticleEmitterData? ParticleEmitter { get; set; }
     public AudioSourceData? AudioSource { get; set; }
+    public BehaviorData? Behavior { get; set; }
 }
 
 public sealed class MeshRendererData
@@ -74,6 +75,16 @@ public sealed class AudioSourceData
     public bool Spatial3D { get; set; } = true;
 }
 
+public sealed class BehaviorData
+{
+    public bool Active { get; set; }
+    public int Type { get; set; }
+    public float[] Axis { get; set; } = [0, 1, 0];
+    public float Speed { get; set; } = 1f;
+    public float Range { get; set; } = 2f;
+    public float Frequency { get; set; } = 1f;
+}
+
 /// <summary>
 /// Source-generated JSON kontext - POVINNE kvuli NativeAOT.
 /// Reflexni serializace by v AOT publish spadla (viz DEEP_RESEARCH 2.3).
@@ -82,12 +93,13 @@ public sealed class AudioSourceData
 [JsonSerializable(typeof(SceneData))]
 [JsonSerializable(typeof(ParticleEmitterData))]
 [JsonSerializable(typeof(AudioSourceData))]
+[JsonSerializable(typeof(BehaviorData))]
 internal partial class SceneJsonContext : JsonSerializerContext { }
 
 public static class SceneSerializer
 {
     public static void Save(string path, Store<Transform> transforms, Store<MeshRenderer> renderers,
-        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, AssetManager assets, LightingShader lighting)
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors, AssetManager assets, LightingShader lighting)
     {
         var scene = new SceneData();
         var entityIndexes = transforms.Entities;
@@ -157,6 +169,20 @@ public static class SceneSerializer
                 };
             }
 
+            if (behaviors.Has(idx))
+            {
+                ref var b = ref behaviors.Get(idx);
+                e.Behavior = new BehaviorData
+                {
+                    Active = b.Active,
+                    Type = b.Type,
+                    Axis = [b.Axis.X, b.Axis.Y, b.Axis.Z],
+                    Speed = b.Speed,
+                    Range = b.Range,
+                    Frequency = b.Frequency
+                };
+            }
+
             scene.Entities.Add(e);
         }
 
@@ -173,7 +199,7 @@ public static class SceneSerializer
     }
 
     public static void Load(string path, World world, Store<Transform> transforms, Store<MeshRenderer> renderers,
-        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, AssetManager assets, LightingShader lighting)
+        Store<Name> names, Store<ParticleEmitter> emitters, Store<AudioSourceComponent> audioSources, Store<BehaviorComponent> behaviors, AssetManager assets, LightingShader lighting)
     {
         var scene = JsonSerializer.Deserialize(File.ReadAllText(path), SceneJsonContext.Default.SceneData);
         if (scene is null) return;
@@ -266,6 +292,20 @@ public static class SceneSerializer
                     Loop = src.Loop,
                     Spatial3D = src.Spatial3D,
                     IsPlaying = false
+                });
+            }
+
+            if (e.Behavior is { } b)
+            {
+                behaviors.Add(idx, new BehaviorComponent
+                {
+                    Active = b.Active,
+                    Type = b.Type,
+                    Axis = b.Axis is { Length: >= 3 } ? new Vector3(b.Axis[0], b.Axis[1], b.Axis[2]) : Vector3.UnitY,
+                    Speed = b.Speed,
+                    Range = b.Range,
+                    Frequency = b.Frequency,
+                    Initialized = false
                 });
             }
         }

@@ -113,6 +113,33 @@ public struct AudioSourceComponent
     };
 }
 
+public struct BehaviorComponent
+{
+    public bool Active;
+    public int Type; // 0 = Rotator, 1 = PingPong, 2 = Orbiter, 3 = Bobber
+    public Vector3 Axis;
+    public float Speed;
+    public float Range;
+    public float Frequency;
+
+    public Vector3 StartPosition;
+    public Quaternion StartRotation;
+    public bool Initialized;
+
+    public static BehaviorComponent Default => new()
+    {
+        Active = false,
+        Type = 0,
+        Axis = Vector3.UnitY,
+        Speed = 1f,
+        Range = 2f,
+        Frequency = 1f,
+        StartPosition = Vector3.Zero,
+        StartRotation = Quaternion.Identity,
+        Initialized = false
+    };
+}
+
 /// <summary>
 /// Prepocet world matic. Rodic se dopocitava rekurzivne pres "stamp" pole,
 /// takze NEZALEZI na poradi v dense poli (driv musel rodic lezet pred ditetem -

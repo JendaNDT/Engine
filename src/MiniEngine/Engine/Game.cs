@@ -25,8 +25,10 @@ public sealed class Game : IDisposable
     private readonly Store<RigidBodyRef> _bodies;
     private readonly Store<ParticleEmitter> _emitters;
     private readonly Store<AudioSourceComponent> _audioSources;
+    private readonly Store<BehaviorComponent> _behaviors;
     private readonly ParticleSystem _particleSystem = new();
     private readonly AudioSystem _audioSystem = new();
+    private readonly BehaviorSystem _behaviorSystem = new();
     private SkyboxRenderer _skybox = null!;
 
     // Fyzika bezi jen kdyz je zapnuta tlacitkem. STOP = dispose celeho sveta,
@@ -76,6 +78,7 @@ public sealed class Game : IDisposable
         _bodies = _world.Store<RigidBodyRef>();
         _emitters = _world.Store<ParticleEmitter>();
         _audioSources = _world.Store<AudioSourceComponent>();
+        _behaviors = _world.Store<BehaviorComponent>();
     }
 
     public void Run()
@@ -238,6 +241,7 @@ public sealed class Game : IDisposable
 
     private void Update(float dt)
     {
+        _behaviorSystem.Update(dt, _transforms, _behaviors, _bodies, _physics);
         _particleSystem.Update(dt, _transforms, _emitters);
         _audioSystem.Update(_camera.Camera, _transforms, _audioSources, _assets);
 
@@ -463,13 +467,14 @@ public sealed class Game : IDisposable
         _playerBody = null;
         _playerEntity = -1;
         _audioSystem.StopAll(_audioSources, _assets);
+        _behaviorSystem.RestoreInitialStates(_transforms, _behaviors);
     }
 
     private void SaveScene()
     {
         try
         {
-            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _audioSources, _assets, _lighting);
+            SceneSerializer.Save(ScenePath, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _assets, _lighting);
             _hierarchy.SceneStatus = "Ulozeno: scene.json";
         }
         catch (Exception ex)
@@ -490,7 +495,7 @@ public sealed class Game : IDisposable
 
         try
         {
-            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _audioSources, _assets, _lighting);
+            SceneSerializer.Load(ScenePath, _world, _transforms, _renderers, _names, _emitters, _audioSources, _behaviors, _assets, _lighting);
             _lightPanel.LoadFrom(_lighting.SunDirection);
             _selection.Clear();
             _hierarchy.SceneStatus = "Nacteno: scene.json";
