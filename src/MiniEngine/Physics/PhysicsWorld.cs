@@ -177,6 +177,23 @@ public sealed class PhysicsWorld : IDisposable
         return handle;
     }
 
+    public BodyHandle AddCharacter(Vector3 position, float radius, float length, float mass)
+    {
+        var capsule = new Capsule(radius, length);
+        var index = Simulation.Shapes.Add(capsule);
+        var inertia = capsule.ComputeInertia(mass);
+
+        // Zamkneme rotaci (nekonecna setrvacnost na vsech osach)
+        inertia.InverseInertiaTensor = default;
+
+        var handle = Simulation.Bodies.Add(BodyDescription.CreateDynamic(
+            new RigidPose(position, Quaternion.Identity), inertia,
+            new CollidableDescription(index, 0.1f), new BodyActivityDescription(0.01f)));
+
+        Track(handle);
+        return handle;
+    }
+
     public BodyHandle AddDynamicBox(Vector3 position, Quaternion rotation, Vector3 size, float mass)
     {
         var box = new Box(size.X, size.Y, size.Z);

@@ -45,6 +45,8 @@ public sealed class Game : IDisposable
     private Action<Camera3D> _drawSceneCached = null!;
 
     private bool _altLooking;   // prave probiha Alt+tazeni (rozhlizeni)
+    private BepuPhysics.BodyHandle? _playerBody;
+    private int _playerEntity = -1;
 
     // Osvetleni + sdileny mesh/material pro krychle.
     // Kresleni pres DrawMesh s world matici = krychle konecne respektuji ROTACI
@@ -274,6 +276,40 @@ public sealed class Game : IDisposable
         // na lokalni pres rodicovu World matici (z minuleho framu, to je ok).
         if (_physics is not null)
         {
+            if (_playerBody.HasValue)
+            {
+                var bodyRef = _physics.Simulation.Bodies[_playerBody.Value];
+                Vector3 currentVel = bodyRef.Velocity.Linear;
+
+                Vector3 camDir = new Vector3(_camera.Camera.Target.X - _camera.Camera.Position.X, 0f, _camera.Camera.Target.Z - _camera.Camera.Position.Z);
+                Vector3 camForward = camDir.LengthSquared() > 0.001f ? Vector3.Normalize(camDir) : new Vector3(0f, 0f, -1f);
+                Vector3 camRight = Vector3.Normalize(Vector3.Cross(camForward, _camera.Camera.Up));
+
+                Vector3 moveDir = Vector3.Zero;
+                if (Raylib.IsKeyDown(KeyboardKey.W)) moveDir += camForward;
+                if (Raylib.IsKeyDown(KeyboardKey.S)) moveDir -= camForward;
+                if (Raylib.IsKeyDown(KeyboardKey.D)) moveDir += camRight;
+                if (Raylib.IsKeyDown(KeyboardKey.A)) moveDir -= camRight;
+
+                if (moveDir != Vector3.Zero)
+                    moveDir = Vector3.Normalize(moveDir);
+
+                float speed = 8f;
+                Vector3 targetVel = moveDir * speed;
+
+                bodyRef.Velocity.Linear = new Vector3(targetVel.X, currentVel.Y, targetVel.Z);
+
+                if (Raylib.IsKeyPressed(KeyboardKey.Space) && MathF.Abs(currentVel.Y) < 0.1f)
+                {
+                    bodyRef.Velocity.Linear = new Vector3(bodyRef.Velocity.Linear.X, 6f, bodyRef.Velocity.Linear.Z);
+                }
+
+                Vector3 playerPos = bodyRef.Pose.Position;
+                Vector3 camOffset = _camera.Camera.Position - _camera.Camera.Target;
+                _camera.Camera.Target = playerPos;
+                _camera.Camera.Position = playerPos + camOffset;
+            }
+
             float alpha = _physics.Step(dt);
 
             var bodies = _bodies.Span;
@@ -301,10 +337,19 @@ public sealed class Game : IDisposable
         // Neviditelna podlaha v urovni gridu, at je kam padat.
         _physics.AddStaticBox(new Vector3(0f, -0.25f, 0f), new Vector3(400f, 0.5f, 400f));
 
-        // Kazda viditelna entita s rendererem dostane dynamicke telo (box dle meritka).
-        // Poza i rozmer boxu se berou z WORLD prostoru - dite otoceneho rodice
-        // musi spadnout z mista, kde ho realne vidis.
-        // Pozn.: i donut ma box - presna kolizni geometrie modelu je v backlogu.
+        int playerIdx = -1;
+        var names = _names.Span;
+        var nameEntities = _names.Entities;
+        for (int i = 0; i < names.Length; i++)
+        {
+            if (string.Equals(names[i].Value, "Player", StringComparison.OrdinalIgnoreCase))
+            {
+                playerIdx = nameEntities[i];
+                break;
+            }
+        }
+
+        // Kazda viditelna entita s rendererem dostane dynamicke telo.
         var renderers = _renderers.Span;
         var entities = _renderers.Entities;
         for (int i = 0; i < renderers.Length; i++)
@@ -318,7 +363,18 @@ public sealed class Game : IDisposable
             var worldScale = TransformHierarchy.WorldScale(t.World);
             float mass = MathF.Max(0.1f, worldScale.X * worldScale.Y * worldScale.Z);
 
-            if (r.ModelHandle >= 0)
+            if (idx == playerIdx)
+            {
+                float radius = 0.4f;
+                float height = 1.0f;
+                var handle = _physics.AddCharacter(
+                    t.World.Translation,
+                    radius, height, mass);
+                _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false, CenterOffset = Vector3.Zero });
+                _playerBody = handle;
+                _playerEntity = idx;
+            }
+            else if (r.ModelHandle >= 0)
             {
                 ref Model m = ref _assets.Get(r.ModelHandle);
                 var vertexList = new System.Collections.Generic.List<Vector3>();
@@ -374,6 +430,8 @@ public sealed class Game : IDisposable
         _physics?.Dispose();
         _physics = null;
         _bodies.Clear();   // Transformy zustanou tam, kde tela dopadla
+        _playerBody = null;
+        _playerEntity = -1;
     }
 
     private void SaveScene()
@@ -779,6 +837,20 @@ public sealed class Game : IDisposable
 
     private void CreateDemoScene()
     {
+        // Vytvoreni hratelneho Player charakteru
+        var pe = _world.Create();
+        var pt = Transform.Identity;
+        pt.Position = new Vector3(0f, 4f, 0f);
+        pt.Scale = new Vector3(0.8f, 1.8f, 0.8f); // vyska postavy cca 1.8m
+        _world.Add(pe, pt);
+        _world.Add(pe, new MeshRenderer
+        {
+            ModelHandle = -1,
+            Tint = new Vector3(0.1f, 0.8f, 0.2f), // zelena
+            Visible = true
+        });
+        _world.Add(pe, new Name { Value = "Player" });
+
         var rng = new Random(42);
         for (int i = 0; i < 200; i++)
         {
