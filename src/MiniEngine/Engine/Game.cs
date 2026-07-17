@@ -89,6 +89,7 @@ public sealed class Game : IDisposable
     private int _playerEntity = -1;
 
     private float _assetScanTimer;
+    private bool _resetLayout;
     private readonly System.Collections.Generic.List<string> _assetFiles = new();
 
     // Osvetleni + sdileny mesh/material pro krychle.
@@ -372,22 +373,22 @@ public sealed class Game : IDisposable
 
             // 1. Globální horní lišta (Global Toolbar)
             float toolbarHeight = 36f;
-            NextWindowRect(wp, new Vector2(ws.X, toolbarHeight));
-            ImGui.Begin("Toolbar", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
+            NextWindowRectAlways(wp, new Vector2(ws.X, toolbarHeight));
+            ImGui.Begin("Toolbar", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoSavedSettings);
             {
                 // Play / Stop
                 if (_physics == null)
                 {
                     ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.6f, 0.3f, 1.0f));
                     ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.15f, 0.7f, 0.35f, 1.0f));
-                    if (ImGui.Button(" ▶ Spustit ")) StartPhysics();
+                    if (ImGui.Button(" PLAY Spustit ")) StartPhysics();
                     ImGui.PopStyleColor(2);
                 }
                 else
                 {
                     ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.8f, 0.15f, 0.15f, 1.0f));
                     ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.9f, 0.2f, 0.2f, 1.0f));
-                    if (ImGui.Button(" ■ Zastavit ")) StopPhysics();
+                    if (ImGui.Button(" STOP Zastavit ")) StopPhysics();
                     ImGui.PopStyleColor(2);
                 }
 
@@ -396,9 +397,9 @@ public sealed class Game : IDisposable
                 ImGui.SameLine();
 
                 // Save / Load
-                if (ImGui.Button(" 💾 Uložit ")) SaveScene();
+                if (ImGui.Button(" Uložit ")) SaveScene();
                 ImGui.SameLine();
-                if (ImGui.Button(" 📂 Načíst ")) LoadScene();
+                if (ImGui.Button(" Načíst ")) LoadScene();
 
                 ImGui.SameLine();
                 ImGui.TextDisabled(" | ");
@@ -409,15 +410,21 @@ public sealed class Game : IDisposable
                 bool canRedo = _history.CanRedo;
 
                 if (!canUndo) ImGui.BeginDisabled();
-                if (ImGui.Button(" ↶ Zpět ")) Undo();
+                if (ImGui.Button(" <- Zpět ")) Undo();
                 if (!canUndo) ImGui.EndDisabled();
 
                 ImGui.SameLine();
 
                 if (!canRedo) ImGui.BeginDisabled();
-                if (ImGui.Button(" ↷ Znovu ")) Redo();
+                if (ImGui.Button(" -> Znovu ")) Redo();
                 if (!canRedo) ImGui.EndDisabled();
                 
+                ImGui.SameLine();
+                ImGui.TextDisabled("|");
+                ImGui.SameLine();
+
+                if (ImGui.Button(" Reset rozvržení ")) _resetLayout = true;
+
                 ImGui.SameLine();
                 ImGui.TextDisabled($"| Kroků zpět: {(canUndo ? "k dispozici" : "není k dispozici")}");
             }
@@ -503,6 +510,8 @@ public sealed class Game : IDisposable
                 ImGui.EndTabBar();
             }
             ImGui.End();
+
+            _resetLayout = false;
 
             MiniEngine.Editor.ToastSystem.UpdateAndDraw(dt);
 
@@ -2133,10 +2142,17 @@ public sealed class Game : IDisposable
         ImGui.PopStyleVar(2);
     }
 
-    private static void NextWindowRect(Vector2 pos, Vector2 size)
+    private void NextWindowRect(Vector2 pos, Vector2 size)
     {
-        ImGui.SetNextWindowPos(pos, ImGuiCond.FirstUseEver);
-        ImGui.SetNextWindowSize(size, ImGuiCond.FirstUseEver);
+        ImGuiCond cond = _resetLayout ? ImGuiCond.Always : ImGuiCond.FirstUseEver;
+        ImGui.SetNextWindowPos(pos, cond);
+        ImGui.SetNextWindowSize(size, cond);
+    }
+
+    private static void NextWindowRectAlways(Vector2 pos, Vector2 size)
+    {
+        ImGui.SetNextWindowPos(pos, ImGuiCond.Always);
+        ImGui.SetNextWindowSize(size, ImGuiCond.Always);
     }
 
     private void DrawStatsPanel()
@@ -2575,32 +2591,32 @@ public sealed class Game : IDisposable
                     ImGui.TableNextColumn();
                     ImGui.PushID(relPath);
 
-                    string icon = "📄";
+                    string icon = "[FILE]";
                     Vector4 color = new Vector4(0.5f, 0.5f, 0.5f, 1f); // default gray
 
                     if (ext == ".glb" || ext == ".gltf")
                     {
-                        icon = "📦";
+                        icon = "[MOD]";
                         color = new Vector4(0.24f, 0.42f, 0.75f, 1f); // Blue
                     }
                     else if (ext == ".vs" || ext == ".fs")
                     {
-                        icon = "⚙️";
+                        icon = "[SHD]";
                         color = new Vector4(0.4f, 0.4f, 0.45f, 1f); // Gray
                     }
                     else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga")
                     {
-                        icon = "🖼️";
+                        icon = "[TEX]";
                         color = new Vector4(0.24f, 0.70f, 0.42f, 1f); // Green
                     }
                     else if (ext == ".wav" || ext == ".ogg" || ext == ".mp3")
                     {
-                        icon = "🎵";
+                        icon = "[SND]";
                         color = new Vector4(0.6f, 0.3f, 0.8f, 1f); // Purple
                     }
                     else if (relPath.EndsWith(".prefab.json", StringComparison.OrdinalIgnoreCase))
                     {
-                        icon = "🧩";
+                        icon = "[PFB]";
                         color = new Vector4(0.85f, 0.5f, 0.2f, 1f); // Orange
                     }
 

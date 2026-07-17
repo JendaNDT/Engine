@@ -171,7 +171,7 @@ public sealed class InspectorPanel
         {
             var pl = _prefabLinks.Get(prefabRoot);
             ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.85f, 0.5f, 0.2f, 0.2f));
-            if (ImGui.CollapsingHeader($"🧩 Prefab Instance ({System.IO.Path.GetFileName(pl.PrefabPath)})", ImGuiTreeNodeFlags.DefaultOpen))
+            if (ImGui.CollapsingHeader($"[PREFAB] Instance ({System.IO.Path.GetFileName(pl.PrefabPath)})", ImGuiTreeNodeFlags.DefaultOpen))
             {
                 ImGui.Indent();
                 ImGui.TextDisabled($"Cesta: assets/{pl.PrefabPath}");
@@ -244,7 +244,7 @@ public sealed class InspectorPanel
 
         // --- Transform ---
         ImGui.Separator();
-        if (ImGui.CollapsingHeader("📐 Transform", ImGuiTreeNodeFlags.DefaultOpen))
+        if (ImGui.CollapsingHeader("[TRS] Transform", ImGuiTreeNodeFlags.DefaultOpen))
         {
         if (OnFocus != null)
         {
@@ -287,7 +287,7 @@ public sealed class InspectorPanel
         if (_renderers.Has(e))
         {
             ImGui.Separator();
-            if (ImGui.CollapsingHeader("📦 Mesh Renderer", ImGuiTreeNodeFlags.DefaultOpen))
+            if (ImGui.CollapsingHeader("[MESH] Mesh Renderer", ImGuiTreeNodeFlags.DefaultOpen))
             {
 
             ref var r = ref _renderers.Get(e);
@@ -388,7 +388,7 @@ public sealed class InspectorPanel
         if (_emitters.Has(e))
         {
             ImGui.Separator();
-            if (ImGui.CollapsingHeader("✨ Particle Emitter", ImGuiTreeNodeFlags.DefaultOpen))
+            if (ImGui.CollapsingHeader("[PART] Particle Emitter", ImGuiTreeNodeFlags.DefaultOpen))
             {
                 ref var emitter = ref _emitters.Get(e);
                 ImGui.Checkbox("Aktivni", ref emitter.Active);
@@ -522,7 +522,7 @@ public sealed class InspectorPanel
         if (_audioSources.Has(e))
         {
             ImGui.Separator();
-            if (ImGui.CollapsingHeader("🔊 Audio Source", ImGuiTreeNodeFlags.DefaultOpen))
+            if (ImGui.CollapsingHeader("[AUD] Audio Source", ImGuiTreeNodeFlags.DefaultOpen))
             {
 
             ref var source = ref _audioSources.Get(e);
@@ -586,7 +586,7 @@ public sealed class InspectorPanel
         if (_behaviors.Has(e))
         {
             ImGui.Separator();
-            if (ImGui.CollapsingHeader("⚙️ Behavior (Skript pohybu)", ImGuiTreeNodeFlags.DefaultOpen))
+            if (ImGui.CollapsingHeader("[SCR] Behavior (Skript pohybu)", ImGuiTreeNodeFlags.DefaultOpen))
             {
 
             ref var b = ref _behaviors.Get(e);
@@ -665,7 +665,7 @@ public sealed class InspectorPanel
         if (_triggers.Has(e))
         {
             ImGui.Separator();
-            if (ImGui.CollapsingHeader("⚡ Trigger (Spouštěč kolizí)", ImGuiTreeNodeFlags.DefaultOpen))
+            if (ImGui.CollapsingHeader("[TRG] Trigger (Spouštěč kolizí)", ImGuiTreeNodeFlags.DefaultOpen))
             {
 
             ref var trigger = ref _triggers.Get(e);
@@ -728,7 +728,7 @@ public sealed class InspectorPanel
         if (_actions.Has(e))
         {
             ImGui.Separator();
-            if (ImGui.CollapsingHeader("⚡ Action (Akce)", ImGuiTreeNodeFlags.DefaultOpen))
+            if (ImGui.CollapsingHeader("[ACT] Action (Akce)", ImGuiTreeNodeFlags.DefaultOpen))
             {
 
             ref var action = ref _actions.Get(e);
@@ -802,7 +802,7 @@ public sealed class InspectorPanel
         if (_lights.Has(e))
         {
             ImGui.Separator();
-            if (ImGui.CollapsingHeader("💡 Světlo", ImGuiTreeNodeFlags.DefaultOpen))
+            if (ImGui.CollapsingHeader("[LGT] Světlo", ImGuiTreeNodeFlags.DefaultOpen))
             {
                 ref var l = ref _lights.Get(e);
                 bool changed = false;
