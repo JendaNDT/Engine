@@ -36,6 +36,7 @@ public sealed class EditorViewport : IDisposable
 
     /// <summary>Volitelny toolbar kresleny nad obrazem sceny (tlacitka kamery, napoveda).</summary>
     public Action? DrawToolbar;
+    public Action? OnStartGuidedTour { get; set; }
 
     public EditorViewport()
     {
@@ -284,6 +285,11 @@ public sealed class EditorViewport : IDisposable
                 {
                     _showHelp = false;
                 }
+                ImGui.SameLine();
+                if (ImGui.Button("Spustit průvodce"))
+                {
+                    OnStartGuidedTour?.Invoke();
+                }
             }
             else
             {
@@ -302,7 +308,16 @@ public sealed class EditorViewport : IDisposable
     /// <summary>Paprsek z mysi do sceny. Souradnice MUSI byt relativni k viewportu, ne k obrazovce.</summary>
     public Ray GetPickRay(Camera3D camera)
     {
-        Vector2 local = Raylib.GetMousePosition() - Origin;
+        Vector2 mousePos = Raylib.GetMousePosition();
+        if (OperatingSystem.IsMacOS())
+        {
+            var winPos = Raylib.GetWindowPosition();
+            if (winPos.X == 0 && winPos.Y <= 40f)
+            {
+                mousePos.Y -= winPos.Y;
+            }
+        }
+        Vector2 local = mousePos - Origin;
         // Pozn.: v raylib 5.5+ je to GetScreenToWorldRayEx (drive GetMouseRay).
         return Raylib.GetScreenToWorldRayEx(local, camera, _width, _height);
     }

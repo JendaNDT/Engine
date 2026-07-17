@@ -1,5 +1,5 @@
 # MiniEngine – Project Status
-*Naposledy aktualizováno: 17. 7. 2026 (Stabilizace, Prefaby, Behavior Node Graph, Duplikace a UI/UX)*
+*Naposledy aktualizováno: 17. 7. 2026 (Výukový systém, Režim učitele a Export hry)*
 
 ## 🎯 Co to je
 Nativní C# 3D herní engine s editorem, plně multiplatformní (Windows x64 a macOS Apple Silicon ARM64) s plnou podporou kompilace **Native AOT** pro maximální výkon a nulové spouštěcí závislosti.
@@ -7,7 +7,7 @@ Nativní C# 3D herní engine s editorem, plně multiplatformní (Windows x64 a m
 
 ---
 
-## ✅ Hotové funkce (Fáze 1 - 19)
+## ✅ Hotové funkce (Fáze 1 - 40)
 
 ### 1. Jádro a Architektura (ECS, Transformace & Hierarchie)
 * **Vlastní sparse-set ECS**: Zcela bezalokační, Native AOT safe, bez reflexe za běhu.
@@ -84,6 +84,31 @@ Nativní C# 3D herní engine s editorem, plně multiplatformní (Windows x64 a m
   - OnChanged v `LightPanel.cs`, deserializační validace v `SceneSerializer.cs`, podpora triggerů bez Name.
   - Inkrementální Toast IDs proti problikávání, ImGuiTheme tabs styling, ukotvená drop-zóna.
 
+### 8. Výuková vrstva, Režim učitele a Export hry (Fáze 37 - 40 + 39b)
+* **Refaktoring herní smyčky**: Oddělení simulace [PlayLoop.cs](file:///Users/jenda/Desktop/Engine/MiniEngine/src/MiniEngine/Engine/PlayLoop.cs) od vykreslování stínů a scény v [SceneRenderer.cs](file:///Users/jenda/Desktop/Engine/MiniEngine/src/MiniEngine/Engine/SceneRenderer.cs) pro čistší modularitu.
+* **Výukový panel lekcí**: Zavedení [LessonPanel.cs](file:///Users/jenda/Desktop/Engine/MiniEngine/src/MiniEngine/Editor/LessonPanel.cs) a [LessonSystem.cs](file:///Users/jenda/Desktop/Engine/MiniEngine/src/MiniEngine/Lessons/LessonSystem.cs) pro interaktivní provázení žáků kurzy (podmínky vyhodnocovány AOT-safe switchem bez reflexe).
+* **Režim učitele (Fáze 38)**:
+  - Administrační dashboard [TeacherPanel.cs](file:///Users/jenda/Desktop/Engine/MiniEngine/src/MiniEngine/Editor/Panels/TeacherPanel.cs) chráněný PINem.
+  - Skenování sdílené složky třídy (periodicky 5s) a diagnostika zaseknutí žáků (heuristika: krok > 8 min bez nápovědy).
+  - Obousměrná synchronizace: žáci odesílají průběh a učitel může dálkově skipnout krok nebo vyresetovat lekci studentovi.
+  - Projektor mód: Globální změna měřítka písma ImGui (x1.0, x1.2, x1.4) přímo z nastavení učitele.
+* **Export hry (Fáze 39b)**:
+  - Exportní dialog [ExportPanel.cs](file:///Users/jenda/Desktop/Engine/MiniEngine/src/MiniEngine/Editor/Panels/ExportPanel.cs) v horní liště editoru.
+  - Kompilace samostatného přehrávače `MiniEngine.Player` pomocí Native AOT a automatické přibalování všech nativních knihoven (`.dll`, `.dylib`, `.so`) pro přenositelnost.
+* **Sloučení ikonových glyfů**: Integrace písma `STIXGeneral.otf` s rozsahem symbolů (▶, ■, ↩, ↪) sloučeného do hlavního fontu `Roboto` v [Game.cs](file:///Users/jenda/Desktop/Engine/MiniEngine/src/MiniEngine/Engine/Game.cs).
+* **Uvítací obrazovka a žákovské layouty**: Zavedení [WelcomePanel.cs](file:///Users/jenda/Desktop/Engine/MiniEngine/src/MiniEngine/Editor/Panels/WelcomePanel.cs) pro úvodní konfiguraci jména a režimu žáka. Režim **Začátečník** zjednodušuje UI (skrývá okna a pokročilé parametry), zatímco režim **Pokročilý** odemyká veškeré funkce vývoje. Tlačítko **Můj Profil** v liště umožňuje přepínání.
+* **macOS DMG Instalátor & Spouštění (`build_dmg.sh`)**:
+  - Skript pro release sestavení, přípravu struktury macOS `.app` balíčku, ad-hoc kódový podpis (nutné pro běh na Apple Silicon) a sestavení DMG instalátoru se zástupcem složky Aplikace.
+  - Oprava macOS CWD přesměrováním na `AppContext.BaseDirectory` na startu programu, čímž se vyřešilo padání při spuštění z Finderu.
+* **Interaktivní průvodce (Guided Tour)**:
+  - Třída [GuidedTour.cs](file:///Users/jenda/Desktop/Engine/MiniEngine/src/MiniEngine/Editor/Panels/GuidedTour.cs) provází uživatele rozhraním pomocí poloprůhledné tmavé masky s vyřezanými a zlatě ohraničenými panely (Hierarchie, Viewport, Inspektor, Soubory, Výukové lekce).
+  - Automatické spuštění po vytvoření profilu a možnost ručního spuštění z nápovědy viewportu.
+* **Oprava layoutu a adaptivní fix myši ve fullscreenu**:
+  - Redesign uvítacího panelu na kompaktní rozměry `500x500px` s jednorádkovými popisky a vynucením ignorování ImGui cache přes `NoSavedSettings` a `ImGuiCond.Always`.
+  - Vyřešen posun myši na macOS v celoobrazovkovém režimu na zařízeních s notchem/menu barem (např. posun `33px` u MacBooku Pro) dynamickým odečítáním Y pozice okna od souřadnic kurzoru.
+* **Diagnostické logování oken**:
+  - Přidán diagnostický výpis stavu okna do `window_debug.txt` pro snadné řešení asymetrií a měřítka na HiDPI Retina obrazovkách.
+
 ---
 
 ## 📁 Stav souborů a struktura projektu
@@ -108,4 +133,15 @@ Nativní C# 3D herní engine s editorem, plně multiplatformní (Windows x64 a m
 * `src/MiniEngine/Editor/Panels/ProfilerPanel.cs` – Panel diagnostiky výkonu s liniovými grafy
 * `src/MiniEngine/Assets/AssetManager.cs` – Ref-counted keš pro 3D modely, textury a zvuky
 * `src/MiniEngine/Physics/PhysicsWorld.cs` – BepuPhysics wrapper s podporou Convex Hull kolizí
+* `src/MiniEngine/Engine/PlayLoop.cs` – Bezalokační simulace play módu (fyzika, behavior, audio)
+* `src/MiniEngine/Engine/SceneRenderer.cs` – Vykreslování geometrie, stínů, skyboxu a post-processingu
+* `src/MiniEngine/Lessons/LessonSystem.cs` – Správa lekcí, ukládání a synchronizace pokroku
+* `src/MiniEngine/Lessons/TeacherMode.cs` – Logika administrace, skener složky třídy a dálková správa
+* `src/MiniEngine/Editor/LessonPanel.cs` – Viewport widget s textem úkolu a nápovědou pro žáka
+* `src/MiniEngine/Editor/Panels/TeacherPanel.cs` – ImGui administrace učitele (PIN, přehled, dálkové ovládání)
+* `src/MiniEngine/Editor/Panels/WelcomePanel.cs` – Uvítací obrazovka a výběr zjednodušeného žákovského layoutu
+* `src/MiniEngine/Editor/Panels/GuidedTour.cs` – Interaktivní průvodce (Guided Tour) s otvory v masce
+* `src/MiniEngine/Editor/Panels/ExportPanel.cs` – ImGui okno nastavení a monitorování exportu hry
+* `src/MiniEngine/Export/GameExporter.cs` – Sestavení, kopírování assetů a přibalování binárek playeru
+* `build_dmg.sh` – Skript pro sestavení, podepsání a zabalení macOS DMG instalátoru
 * `assets/shaders/` – Zdrojové soubory pro osvětlení, oblohu a post-processing shadery

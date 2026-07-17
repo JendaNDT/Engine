@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- MiniPlayer: přehrávač her bez editoru (Fáze 39).
+       Sdílí zdrojáky enginu přes Compile Include – VYNECHÁVÁ Editor/
+       a ImGui závislosti. CI (build.yml) publishne NativeAOT pro
+       win-x64 a osx-arm64 do player/<rid>/ vedle editoru. -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>MiniPlayer</AssemblyName>
+    <RootNamespace>MiniEngine.Player</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Sdílené jádro enginu (BEZ Editor/ a bez Game.cs, který táhne ImGui).
+         Cesty uprav podle umístění projektu, např. src/MiniEngine.Player/. -->
+    <Compile Include="../MiniEngine/Core/**/*.cs" />
+    <Compile Include="../MiniEngine/Assets/**/*.cs" />
+    <Compile Include="../MiniEngine/Audio/**/*.cs" />
+    <Compile Include="../MiniEngine/Physics/**/*.cs" />
+    <Compile Include="../MiniEngine/Rendering/**/*.cs" />
+    <Compile Include="../MiniEngine/Engine/SceneSerializer.cs" />
+    <Compile Include="../MiniEngine/Engine/PlayLoop.cs" />
+    <Compile Include="../MiniEngine/Engine/SceneRenderer.cs" />
+    <Compile Include="../MiniEngine/Export/GameExporter.cs" />
+    <!-- GameExporter.cs sem nepatří (žije jen v editoru);
+         GameSettings/GameJsonContext přesuň do sdíleného souboru,
+         např. Core/GameSettings.cs, ať je vidí editor i přehrávač. -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Raylib-cs" Version="7.0.1" />
+    <PackageReference Include="BepuPhysics" Version="2.4.0" />
+    <!-- POZOR: žádné ImGui.NET / rlImGui-cs – přehrávač je bez UI. -->
+  </ItemGroup>
+
+</Project>

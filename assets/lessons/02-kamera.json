@@ -1,0 +1,45 @@
+{
+  "Id": "02-kamera",
+  "Nazev": "Pohyb a kamera",
+  "Popis": "Nauč se pohybovat po scéně a tvořit nové objekty.",
+  "Kroky": [
+    {
+      "Text": "Označ v Hierarchii krychli s názvem 'Krychle 0'.",
+      "CilEntity": "Krychle 0",
+      "Napoveda": [
+        "V levém panelu Hierarchie najdi položku 'Krychle 0'.",
+        "Klikni na ni levým tlačítkem myši."
+      ],
+      "Podminka": {
+        "Typ": "VybranaEntita",
+        "Jmeno": "Krychle 0"
+      }
+    },
+    {
+      "Text": "Vytvoř novou entitu tlačítkem '+' v levém panelu a pojmenuj ji 'Svicka'.",
+      "CilEntity": "",
+      "Napoveda": [
+        "Klikni na tlačítko '+' v horní části panelu Hierarchie.",
+        "Zvol 'Prázdná entita' a v pravém panelu ji přejmenuj na 'Svicka'."
+      ],
+      "Podminka": {
+        "Typ": "VybranaEntita",
+        "Jmeno": "Svicka"
+      }
+    },
+    {
+      "Text": "Přisuň objekt 'Svicka' ke 'Krychle 0' do vzdálenosti pod 4 metry.",
+      "CilEntity": "Svicka",
+      "Napoveda": [
+        "Ujisti se, že máš vybranou entitu 'Svicka'.",
+        "Použij pohybové gizmo (klávesa W) a táhni za šipky, nebo přepiš pozici v Inspektoru."
+      ],
+      "Podminka": {
+        "Typ": "VzdalenostOd",
+        "Jmeno": "Svicka",
+        "Od": "Krychle 0",
+        "Vzdalenost": 4.0
+      }
+    }
+  ]
+}

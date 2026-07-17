@@ -1,0 +1,44 @@
+{
+  "Id": "05-castice",
+  "Nazev": "Částice: oheň a kouř",
+  "Popis": "Vytvoř vizuální efekty pomocí částicového emitoru.",
+  "Kroky": [
+    {
+      "Text": "Vyber objekt 'Svicka'.",
+      "CilEntity": "Svicka",
+      "Napoveda": [
+        "V levém panelu klikni na položku 'Svicka'."
+      ],
+      "Podminka": {
+        "Typ": "VybranaEntita",
+        "Jmeno": "Svicka"
+      }
+    },
+    {
+      "Text": "Přidej komponentu 'Částice' (ParticleEmitter) ke svíčce.",
+      "CilEntity": "Svicka",
+      "Napoveda": [
+        "V pravém panelu klikni na '+ Přidat komponentu' a vyber 'Částice'."
+      ],
+      "Podminka": {
+        "Typ": "MaKomponentu",
+        "Jmeno": "Svicka",
+        "Komponenta": "ParticleEmitter"
+      }
+    },
+    {
+      "Text": "Zvedni svíčku do výšky Y alespoň 2, aby částice měly prostor stoupat.",
+      "CilEntity": "Svicka",
+      "Napoveda": [
+        "Ujisti se, že máš vybranou entitu 'Svicka'.",
+        "V Transform u Pozice změň Y na 2.0 nebo více."
+      ],
+      "Podminka": {
+        "Typ": "Vlastnost",
+        "Jmeno": "Svicka",
+        "Cesta": "Transform.Position.Y",
+        "Min": 2.0
+      }
+    }
+  ]
+}

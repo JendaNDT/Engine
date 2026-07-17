@@ -64,7 +64,6 @@ namespace MiniEngine.Editor
                 {
                     _graphStore.Add(e, new BehaviorGraphComponent { Enabled = true, GraphJson = "" });
                 }
-                ImGui.End();
                 return;
             }
 

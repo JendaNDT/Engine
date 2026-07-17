@@ -1,0 +1,30 @@
+{
+  "Id": "06-zvuk",
+  "Nazev": "Zvuk ve 3D",
+  "Popis": "Přidej do scény prostorový zvuk, který se mění podle polohy.",
+  "Kroky": [
+    {
+      "Text": "Vyber objekt 'Svicka'.",
+      "CilEntity": "Svicka",
+      "Napoveda": [
+        "V levém panelu klikni na položku 'Svicka'."
+      ],
+      "Podminka": {
+        "Typ": "VybranaEntita",
+        "Jmeno": "Svicka"
+      }
+    },
+    {
+      "Text": "Přidej komponentu 'Zvuk' (AudioSource) ke svíčce.",
+      "CilEntity": "Svicka",
+      "Napoveda": [
+        "V pravém panelu klikni na '+ Přidat komponentu' a vyber 'Zvuk'."
+      ],
+      "Podminka": {
+        "Typ": "MaKomponentu",
+        "Jmeno": "Svicka",
+        "Komponenta": "AudioSource"
+      }
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "Id": "03-svetlo",
+  "Nazev": "Světlo a stín",
+  "Popis": "Nauč se přidat světlo, nastavit mu barvu a sledovat stíny.",
+  "Kroky": [
+    {
+      "Text": "Vyber svíčku v panelu Hierarchie.",
+      "CilEntity": "Svicka",
+      "Napoveda": [
+        "Hierarchie je levý panel se seznamem objektů.",
+        "Klikni na řádek se jménem Svicka."
+      ],
+      "Podminka": { "Typ": "VybranaEntita", "Jmeno": "Svicka" }
+    },
+    {
+      "Text": "Přidej svíčce komponentu Světlo.",
+      "CilEntity": "Svicka",
+      "Napoveda": [
+        "V Inspektoru (pravý panel) sjeď dolů.",
+        "Klikni na + Přidat komponentu a vyber Světlo."
+      ],
+      "Podminka": { "Typ": "MaKomponentu", "Jmeno": "Svicka", "Komponenta": "Light" }
+    },
+    {
+      "Text": "Nastav světlu teplou barvu (hodně červené, málo modré).",
+      "CilEntity": "Svicka",
+      "Napoveda": [
+        "V Inspektoru najdi sekci Světlo a polož Barva.",
+        "Táhni červený kanál nahoru (nad 0,9)."
+      ],
+      "Podminka": { "Typ": "Vlastnost", "Jmeno": "Svicka", "Cesta": "Light.Color.R", "Min": 0.9 }
+    },
+    {
+      "Text": "Zvyš intenzitu světla alespoň na 2.",
+      "CilEntity": "Svicka",
+      "Napoveda": [ "Posuvník Intenzita ve stejné sekci." ],
+      "Podminka": { "Typ": "Vlastnost", "Jmeno": "Svicka", "Cesta": "Light.Intensity", "Min": 2.0 }
+    },
+    {
+      "Text": "Přisuň hráče ke svíčce, ať vidíš stín zblízka.",
+      "CilEntity": "Hrac",
+      "Napoveda": [
+        "Vyber Hráče a použij gizmo Posun (W).",
+        "Stačí vzdálenost do 3 metrů."
+      ],
+      "Podminka": { "Typ": "VzdalenostOd", "Jmeno": "Hrac", "Od": "Svicka", "Vzdalenost": 3.0 }
+    }
+  ]
+}

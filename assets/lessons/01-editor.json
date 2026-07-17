@@ -1,0 +1,45 @@
+{
+  "Id": "01-editor",
+  "Nazev": "Seznámení s editorem",
+  "Popis": "Nauč se označovat objekty a měnit jejich vlastnosti v pravém panelu.",
+  "Kroky": [
+    {
+      "Text": "Vyber objekt 'Donut (test.glb)' v panelu Hierarchie na levé straně.",
+      "CilEntity": "Donut (test.glb)",
+      "Napoveda": [
+        "Hierarchie je levý panel se seznamem všech objektů ve scéně.",
+        "Klikni na položku 'Donut (test.glb)'."
+      ],
+      "Podminka": {
+        "Typ": "VybranaEntita",
+        "Jmeno": "Donut (test.glb)"
+      }
+    },
+    {
+      "Text": "Přejmenuj tento objekt na 'Hrac' v horním textovém poli panelu Inspektor.",
+      "CilEntity": "Donut (test.glb)",
+      "Napoveda": [
+        "Inspektor je pravý panel, kde vidíš detaily označeného objektu.",
+        "Nahoře přepiš text 'Donut (test.glb)' na 'Hrac' a potvrď klávesou Enter."
+      ],
+      "Podminka": {
+        "Typ": "VybranaEntita",
+        "Jmeno": "Hrac"
+      }
+    },
+    {
+      "Text": "Přesuň hráče nahoru tak, aby jeho pozice Y byla alespoň 3.",
+      "CilEntity": "Hrac",
+      "Napoveda": [
+        "V Inspektoru v sekci Transform najdeš Pozice (X, Y, Z).",
+        "Změň druhou hodnotu (Y) na 3 nebo více."
+      ],
+      "Podminka": {
+        "Typ": "Vlastnost",
+        "Jmeno": "Hrac",
+        "Cesta": "Transform.Position.Y",
+        "Min": 3.0
+      }
+    }
+  ]
+}

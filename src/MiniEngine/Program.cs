@@ -9,6 +9,8 @@ public static class Program
     [System.STAThread]
     public static void Main()
     {
+        System.IO.Directory.SetCurrentDirectory(System.AppContext.BaseDirectory);
+
         using var game = new Game();
         game.Run();
     }

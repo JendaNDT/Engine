@@ -1,0 +1,44 @@
+{
+  "Id": "07-chovani",
+  "Nazev": "Chování: rotátor a spol.",
+  "Popis": "Rozpohybuj objekty pomocí předpřipravených skriptů chování.",
+  "Kroky": [
+    {
+      "Text": "Vyber 'Krychle 1' v Hierarchii.",
+      "CilEntity": "Krychle 1",
+      "Napoveda": [
+        "V levém panelu Hierarchie najdi položku 'Krychle 1' a klikni na ni."
+      ],
+      "Podminka": {
+        "Typ": "VybranaEntita",
+        "Jmeno": "Krychle 1"
+      }
+    },
+    {
+      "Text": "Přidej komponentu 'Chování' (Behavior) ke 'Krychle 1'.",
+      "CilEntity": "Krychle 1",
+      "Napoveda": [
+        "V pravém panelu klikni na '+ Přidat komponentu' a zvol 'Chování'."
+      ],
+      "Podminka": {
+        "Typ": "MaKomponentu",
+        "Jmeno": "Krychle 1",
+        "Komponenta": "Behavior"
+      }
+    },
+    {
+      "Text": "Zvětši rychlost (Speed) chování alespoň na 3.",
+      "CilEntity": "Krychle 1",
+      "Napoveda": [
+        "V sekci Chování v Inspektoru najdi položku Rychlost.",
+        "Přepiš ji na hodnotu 3.0 nebo více."
+      ],
+      "Podminka": {
+        "Typ": "Vlastnost",
+        "Jmeno": "Krychle 1",
+        "Cesta": "Behavior.Speed",
+        "Min": 3.0
+      }
+    }
+  ]
+}

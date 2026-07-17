@@ -20,6 +20,7 @@ public sealed class LightPanel
     private float _elevationDeg = DefaultElevation;
 
     public Action? OnChanged;
+    public MiniEngine.Lessons.LessonSystem? LessonSystem { get; set; }
 
     public LightPanel(LightingShader lighting, PostProcessing postProcessing)
     {
@@ -47,6 +48,8 @@ public sealed class LightPanel
 
     public void DrawInner()
     {
+        bool isBeginner = LessonSystem != null && LessonSystem.LayoutMode == "Zacatecnik";
+
         ImGui.PushItemWidth(-110f);
 
         bool changed = false;
@@ -75,30 +78,33 @@ public sealed class LightPanel
         ImGui.SliderFloat("Odlesky", ref _lighting.SpecStrength, 0f, 1f, "%.2f");
         if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
 
-        ImGui.Separator();
-        ImGui.Text("Post-processing (Efekty)");
-
-        if (ImGui.Checkbox("Aktivovat efekty", ref _postProcessing.Enabled)) changed = true;
-
-        if (_postProcessing.Enabled)
+        if (!isBeginner)
         {
-            ImGui.SliderFloat("Intenzita Bloom", ref _postProcessing.BloomIntensity, 0f, 2f, "%.2f");
-            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+            ImGui.Separator();
+            ImGui.Text("Post-processing (Efekty)");
 
-            ImGui.SliderFloat("Jasovy prah Bloom", ref _postProcessing.BloomThreshold, 0.1f, 1.0f, "%.2f");
-            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+            if (ImGui.Checkbox("Aktivovat efekty", ref _postProcessing.Enabled)) changed = true;
 
-            ImGui.SliderFloat("Sila Vignette", ref _postProcessing.VignettePower, 0f, 1f, "%.2f");
-            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+            if (_postProcessing.Enabled)
+            {
+                ImGui.SliderFloat("Intenzita Bloom", ref _postProcessing.BloomIntensity, 0f, 2f, "%.2f");
+                if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
 
-            ImGui.SliderFloat("Saturace barev", ref _postProcessing.Saturation, 0f, 2f, "%.2f");
-            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+                ImGui.SliderFloat("Jasovy prah Bloom", ref _postProcessing.BloomThreshold, 0.1f, 1.0f, "%.2f");
+                if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
 
-            ImGui.SliderFloat("Kontrast obrazu", ref _postProcessing.Contrast, 0.5f, 2.0f, "%.2f");
-            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+                ImGui.SliderFloat("Sila Vignette", ref _postProcessing.VignettePower, 0f, 1f, "%.2f");
+                if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
 
-            ImGui.SliderFloat("Chromatická aberace", ref _postProcessing.ChromaticAberration, 0.0f, 0.08f, "%.3f");
-            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+                ImGui.SliderFloat("Saturace barev", ref _postProcessing.Saturation, 0f, 2f, "%.2f");
+                if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
+                ImGui.SliderFloat("Kontrast obrazu", ref _postProcessing.Contrast, 0.5f, 2.0f, "%.2f");
+                if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
+                ImGui.SliderFloat("Chromatická aberace", ref _postProcessing.ChromaticAberration, 0.0f, 0.08f, "%.3f");
+                if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+            }
         }
 
         ImGui.Spacing();

@@ -56,7 +56,28 @@ public sealed class AssetManager : IDisposable
 
     public int LoadModel(string path)
     {
-        string key = Path.GetFullPath(path);
+        if (string.IsNullOrEmpty(path)) return -1;
+        string fullPath = Path.Combine(AssetsRoot, path);
+        if (!File.Exists(fullPath))
+        {
+            if (File.Exists(path))
+            {
+                fullPath = path;
+            }
+            else
+            {
+                string baseCombined = Path.Combine(AppContext.BaseDirectory, path);
+                if (File.Exists(baseCombined))
+                {
+                    fullPath = baseCombined;
+                }
+                else
+                {
+                    fullPath = Path.Combine(AssetsRoot, path);
+                }
+            }
+        }
+        string key = Path.GetFullPath(fullPath);
 
         if (_byPath.TryGetValue(key, out int id))
         {
@@ -164,7 +185,32 @@ public sealed class AssetManager : IDisposable
     public unsafe ModelAnimation* LoadAnimations(string path, out int count)
     {
         int c = 0;
-        var anims = Raylib.LoadModelAnimations(Path.GetFullPath(path), ref c);
+        if (string.IsNullOrEmpty(path))
+        {
+            count = 0;
+            return null;
+        }
+        string fullPath = Path.Combine(AssetsRoot, path);
+        if (!File.Exists(fullPath))
+        {
+            if (File.Exists(path))
+            {
+                fullPath = path;
+            }
+            else
+            {
+                string baseCombined = Path.Combine(AppContext.BaseDirectory, path);
+                if (File.Exists(baseCombined))
+                {
+                    fullPath = baseCombined;
+                }
+                else
+                {
+                    fullPath = Path.Combine(AssetsRoot, path);
+                }
+            }
+        }
+        var anims = Raylib.LoadModelAnimations(Path.GetFullPath(fullPath), ref c);
         count = c;
         return anims;
     }

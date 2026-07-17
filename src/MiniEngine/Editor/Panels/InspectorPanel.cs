@@ -27,6 +27,7 @@ public sealed class InspectorPanel
     public Action? OnChanged;
     public Action<int>? OnRevertPrefab;
     public Action<int>? OnApplyPrefab;
+    public MiniEngine.Lessons.LessonSystem? LessonSystem { get; set; }
 
     private string[] _availableTextures = [];
     private string[] _availableAudioClips = [];
@@ -146,6 +147,8 @@ public sealed class InspectorPanel
             return;
         }
 
+        bool isBeginner = LessonSystem != null && LessonSystem.LayoutMode == "Zacatecnik";
+
         // Sirka poli: nech 110 px vpravo na popisky, jinak se oriznou mimo okno.
         ImGui.PushItemWidth(-110f);
 
@@ -153,8 +156,11 @@ public sealed class InspectorPanel
         {
             ScanAssets();
         }
-        ImGui.SameLine();
-        ImGui.TextDisabled($"[Tex: {_availableTextures.Length}, Aud: {_availableAudioClips.Length}]");
+        if (!isBeginner)
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled($"[Tex: {_availableTextures.Length}, Aud: {_availableAudioClips.Length}]");
+        }
 
         // --- Nazev ---
         if (_names.Has(e))
@@ -201,7 +207,7 @@ public sealed class InspectorPanel
                 }
                 ImGui.Text($"Lokální změny (overrides): {overrideCount}");
 
-                if (overrideCount > 0)
+                if (overrideCount > 0 && !isBeginner)
                 {
                     if (ImGui.TreeNode("Detail změn..."))
                     {
@@ -661,140 +667,143 @@ public sealed class InspectorPanel
             }
         }
 
-        // --- TriggerComponent ---
-        if (_triggers.Has(e))
+        if (!isBeginner)
         {
-            ImGui.Separator();
-            if (ImGui.CollapsingHeader("[TRG] Trigger (Spouštěč kolizí)", ImGuiTreeNodeFlags.DefaultOpen))
+            // --- TriggerComponent ---
+            if (_triggers.Has(e))
             {
-
-            ref var trigger = ref _triggers.Get(e);
-            ImGui.Checkbox("Aktivní Trigger", ref trigger.Active);
-            if (ImGui.IsItemDeactivatedAfterEdit()) OnChanged?.Invoke();
-
-            ImGui.DragFloat3("Velikost zóny", ref trigger.Size, 0.05f, 0.1f, 50f);
-            if (ImGui.IsItemDeactivatedAfterEdit()) OnChanged?.Invoke();
-
-            // Vyhledání všech entit ve scéně (přes Transform) pro spárování cílů
-            var trEntities = _transforms.Entities;
-            var entityNames = new System.Collections.Generic.List<string> { "(Žádný cíl)" };
-            var entityIndices = new System.Collections.Generic.List<int> { -1 };
-            for (int idx = 0; idx < trEntities.Length; idx++)
-            {
-                int entIndex = trEntities[idx];
-                if (entIndex == e) continue; // ignorovat sebe sama
-
-                string nameStr = _names.Has(entIndex) ? _names.Get(entIndex).Value : $"Entita #{entIndex}";
-                entityNames.Add($"[{entIndex}] {nameStr}");
-                entityIndices.Add(entIndex);
-            }
-
-            int currentTargetIndex = entityIndices.IndexOf(trigger.TargetEntity);
-            if (currentTargetIndex < 0)
-            {
-                currentTargetIndex = 0;
-                if (trigger.TargetEntity != -1)
+                ImGui.Separator();
+                if (ImGui.CollapsingHeader("[TRG] Trigger (Spouštěč kolizí)", ImGuiTreeNodeFlags.DefaultOpen))
                 {
-                    // Cíl byl smazán z hierarchie -> vyčistíme ID cílů na -1
-                    trigger.TargetEntity = -1;
-                    OnChanged?.Invoke();
+
+                ref var trigger = ref _triggers.Get(e);
+                ImGui.Checkbox("Aktivní Trigger", ref trigger.Active);
+                if (ImGui.IsItemDeactivatedAfterEdit()) OnChanged?.Invoke();
+
+                ImGui.DragFloat3("Velikost zóny", ref trigger.Size, 0.05f, 0.1f, 50f);
+                if (ImGui.IsItemDeactivatedAfterEdit()) OnChanged?.Invoke();
+
+                // Vyhledání všech entit ve scéně (přes Transform) pro spárování cílů
+                var trEntities = _transforms.Entities;
+                var entityNames = new System.Collections.Generic.List<string> { "(Žádný cíl)" };
+                var entityIndices = new System.Collections.Generic.List<int> { -1 };
+                for (int idx = 0; idx < trEntities.Length; idx++)
+                {
+                    int entIndex = trEntities[idx];
+                    if (entIndex == e) continue; // ignorovat sebe sama
+
+                    string nameStr = _names.Has(entIndex) ? _names.Get(entIndex).Value : $"Entita #{entIndex}";
+                    entityNames.Add($"[{entIndex}] {nameStr}");
+                    entityIndices.Add(entIndex);
                 }
-            }
-            string[] entityComboItems = entityNames.ToArray();
-            if (ImGui.Combo("Cílový objekt akce", ref currentTargetIndex, entityComboItems, entityComboItems.Length))
-            {
-                trigger.TargetEntity = entityIndices[currentTargetIndex];
-                OnChanged?.Invoke();
-            }
 
-            if (ImGui.Button("Odebrat Trigger"))
-            {
-                _triggers.RemoveAt(e);
-                OnChanged?.Invoke();
-            }
-            }
-        }
-        else
-        {
-            ImGui.Separator();
-            if (ImGui.Button("Přidat Trigger"))
-            {
-                _triggers.Add(e, TriggerComponent.Default);
-                OnChanged?.Invoke();
-            }
-        }
-
-        // --- ActionComponent ---
-        if (_actions.Has(e))
-        {
-            ImGui.Separator();
-            if (ImGui.CollapsingHeader("[ACT] Action (Akce)", ImGuiTreeNodeFlags.DefaultOpen))
-            {
-
-            ref var action = ref _actions.Get(e);
-            ImGui.Checkbox("Aktivní Akce", ref action.Active);
-            if (ImGui.IsItemDeactivatedAfterEdit()) OnChanged?.Invoke();
-
-            string[] actionTypes = ["Spustit zvuk", "Přepnout částice (Emit)", "Přepnout viditelnost"];
-            int actType = action.ActionType;
-            if (ImGui.Combo("Typ akce", ref actType, actionTypes, actionTypes.Length))
-            {
-                action.ActionType = actType;
-                OnChanged?.Invoke();
-            }
-
-            if (action.ActionType == 0)
-            {
-                string currentClip = action.ActionParam ?? "";
-                int selectedAudioIdx = Array.IndexOf(_availableAudioClips, currentClip);
-
-                int comboSelect = selectedAudioIdx + 1;
-                if (ImGui.Combo("Zvukový soubor", ref comboSelect, _comboAudioItems, _comboAudioItems.Length))
+                int currentTargetIndex = entityIndices.IndexOf(trigger.TargetEntity);
+                if (currentTargetIndex < 0)
                 {
-                    action.ActionParam = comboSelect == 0 ? "" : _comboAudioItems[comboSelect];
-                    OnChanged?.Invoke();
-                }
-                if (ImGui.BeginDragDropTarget())
-                {
-                    var payload = ImGui.AcceptDragDropPayload("ASSET_AUDIO_PATH");
-                    unsafe
+                    currentTargetIndex = 0;
+                    if (trigger.TargetEntity != -1)
                     {
-                        if (payload.NativePtr != null)
-                        {
-                            int length = payload.DataSize;
-                            byte* dataPtr = (byte*)payload.Data;
-                            byte[] bytes = new byte[length];
-                            System.Runtime.InteropServices.Marshal.Copy((IntPtr)dataPtr, bytes, 0, length);
-                            action.ActionParam = System.Text.Encoding.UTF8.GetString(bytes);
-                            OnChanged?.Invoke();
-                        }
+                        // Cíl byl smazán z hierarchie -> vyčistíme ID cílů na -1
+                        trigger.TargetEntity = -1;
+                        OnChanged?.Invoke();
                     }
-                    ImGui.EndDragDropTarget();
+                }
+                string[] entityComboItems = entityNames.ToArray();
+                if (ImGui.Combo("Cílový objekt akce", ref currentTargetIndex, entityComboItems, entityComboItems.Length))
+                {
+                    trigger.TargetEntity = entityIndices[currentTargetIndex];
+                    OnChanged?.Invoke();
+                }
+
+                if (ImGui.Button("Odebrat Trigger"))
+                {
+                    _triggers.RemoveAt(e);
+                    OnChanged?.Invoke();
+                }
                 }
             }
-            else if (action.ActionType == 1)
+            else
             {
-                ImGui.TextDisabled("Akce spustí/zastaví ParticleEmitter na této entitě.");
-            }
-            else if (action.ActionType == 2)
-            {
-                ImGui.TextDisabled("Akce přepne viditelnost MeshRendereru na této entitě.");
+                ImGui.Separator();
+                if (ImGui.Button("Přidat Trigger"))
+                {
+                    _triggers.Add(e, TriggerComponent.Default);
+                    OnChanged?.Invoke();
+                }
             }
 
-            if (ImGui.Button("Odebrat Akci"))
+            // --- ActionComponent ---
+            if (_actions.Has(e))
             {
-                _actions.RemoveAt(e);
-                OnChanged?.Invoke();
+                ImGui.Separator();
+                if (ImGui.CollapsingHeader("[ACT] Action (Akce)", ImGuiTreeNodeFlags.DefaultOpen))
+                {
+
+                ref var action = ref _actions.Get(e);
+                ImGui.Checkbox("Aktivní Akce", ref action.Active);
+                if (ImGui.IsItemDeactivatedAfterEdit()) OnChanged?.Invoke();
+
+                string[] actionTypes = ["Spustit zvuk", "Přepnout částice (Emit)", "Přepnout viditelnost"];
+                int actType = action.ActionType;
+                if (ImGui.Combo("Typ akce", ref actType, actionTypes, actionTypes.Length))
+                {
+                    action.ActionType = actType;
+                    OnChanged?.Invoke();
+                }
+
+                if (action.ActionType == 0)
+                {
+                    string currentClip = action.ActionParam ?? "";
+                    int selectedAudioIdx = Array.IndexOf(_availableAudioClips, currentClip);
+
+                    int comboSelect = selectedAudioIdx + 1;
+                    if (ImGui.Combo("Zvukový soubor", ref comboSelect, _comboAudioItems, _comboAudioItems.Length))
+                    {
+                        action.ActionParam = comboSelect == 0 ? "" : _comboAudioItems[comboSelect];
+                        OnChanged?.Invoke();
+                    }
+                    if (ImGui.BeginDragDropTarget())
+                    {
+                        var payload = ImGui.AcceptDragDropPayload("ASSET_AUDIO_PATH");
+                        unsafe
+                        {
+                            if (payload.NativePtr != null)
+                            {
+                                int length = payload.DataSize;
+                                byte* dataPtr = (byte*)payload.Data;
+                                byte[] bytes = new byte[length];
+                                System.Runtime.InteropServices.Marshal.Copy((IntPtr)dataPtr, bytes, 0, length);
+                                action.ActionParam = System.Text.Encoding.UTF8.GetString(bytes);
+                                OnChanged?.Invoke();
+                            }
+                        }
+                        ImGui.EndDragDropTarget();
+                    }
+                }
+                else if (action.ActionType == 1)
+                {
+                    ImGui.TextDisabled("Akce spustí/zastaví ParticleEmitter na této entitě.");
+                }
+                else if (action.ActionType == 2)
+                {
+                    ImGui.TextDisabled("Akce přepne viditelnost MeshRendereru na této entitě.");
+                }
+
+                if (ImGui.Button("Odebrat Akci"))
+                {
+                    _actions.RemoveAt(e);
+                    OnChanged?.Invoke();
+                }
+                }
             }
-            }
-        }
-        else
-        {
-            ImGui.Separator();
-            if (ImGui.Button("Přidat Akci"))
+            else
             {
-                _actions.Add(e, ActionComponent.Default);
-                OnChanged?.Invoke();
+                ImGui.Separator();
+                if (ImGui.Button("Přidat Akci"))
+                {
+                    _actions.Add(e, ActionComponent.Default);
+                    OnChanged?.Invoke();
+                }
             }
         }
 

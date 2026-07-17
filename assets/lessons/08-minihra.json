@@ -1,0 +1,43 @@
+{
+  "Id": "08-minihra",
+  "Nazev": "Vlastní minihra",
+  "Popis": "Dokonči nastavení své hry a připrav ji na export.",
+  "Kroky": [
+    {
+      "Text": "Vyber objekt 'Hrac'.",
+      "CilEntity": "Hrac",
+      "Napoveda": [
+        "V levém panelu Hierarchie klikni na 'Hrac'."
+      ],
+      "Podminka": {
+        "Typ": "VybranaEntita",
+        "Jmeno": "Hrac"
+      }
+    },
+    {
+      "Text": "Přidej hráči komponentu 'Chování' (Behavior) pro pohyb.",
+      "CilEntity": "Hrac",
+      "Napoveda": [
+        "V pravém panelu klikni na '+ Přidat komponentu' a vyber 'Chování'."
+      ],
+      "Podminka": {
+        "Typ": "MaKomponentu",
+        "Jmeno": "Hrac",
+        "Komponenta": "Behavior"
+      }
+    },
+    {
+      "Text": "Přisuň hráče ke 'Krychle 2' na vzdálenost do 2 metrů.",
+      "CilEntity": "Hrac",
+      "Napoveda": [
+        "Vyber hráče 'Hrac' a pomocí gizma (klávesa W) ho posuň těsně ke 'Krychle 2'."
+      ],
+      "Podminka": {
+        "Typ": "VzdalenostOd",
+        "Jmeno": "Hrac",
+        "Od": "Krychle 2",
+        "Vzdalenost": 2.0
+      }
+    }
+  ]
+}

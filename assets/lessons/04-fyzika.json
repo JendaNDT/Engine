@@ -1,0 +1,43 @@
+{
+  "Id": "04-fyzika",
+  "Nazev": "Fyzika: pád a kolize",
+  "Popis": "Přidej objektům fyzikální vlastnosti, aby padaly a narážely do sebe.",
+  "Kroky": [
+    {
+      "Text": "Vyber našeho hráče s názvem 'Hrac'.",
+      "CilEntity": "Hrac",
+      "Napoveda": [
+        "V levém panelu Hierarchie klikni na 'Hrac'."
+      ],
+      "Podminka": {
+        "Typ": "VybranaEntita",
+        "Jmeno": "Hrac"
+      }
+    },
+    {
+      "Text": "Přidej hráči komponentu 'Fyzika' (RigidBody).",
+      "CilEntity": "Hrac",
+      "Napoveda": [
+        "V panelu Inspektor sjeď dolů a klikni na '+ Přidat komponentu'.",
+        "Zvol 'Fyzika'."
+      ],
+      "Podminka": {
+        "Typ": "MaKomponentu",
+        "Jmeno": "Hrac",
+        "Komponenta": "RigidBody"
+      }
+    },
+    {
+      "Text": "Vyber objekt 'Svicka' a také mu přidej komponentu 'Fyzika'.",
+      "CilEntity": "Svicka",
+      "Napoveda": [
+        "Označ 'Svicka' v Hierarchii a v pravém panelu klikni na '+ Přidat komponentu' -> 'Fyzika'."
+      ],
+      "Podminka": {
+        "Typ": "MaKomponentu",
+        "Jmeno": "Svicka",
+        "Komponenta": "RigidBody"
+      }
+    }
+  ]
+}

@@ -14,13 +14,6 @@ using Transform = MiniEngine.Core.Transform;
 
 namespace MiniEngine.Engine;
 
-public enum RenderMode
-{
-    Lit,
-    Unlit,
-    Wireframe
-}
-
 public sealed class Game : IDisposable
 {
     private readonly World _world = new();
@@ -39,7 +32,6 @@ public sealed class Game : IDisposable
     private readonly Store<PrefabLink> _prefabLinks;
     private readonly Store<BehaviorGraphComponent> _graphs;
     private readonly NodeEditorPanel _nodeEditor;
-    private readonly Dictionary<int, BehaviorGraph> _activeGraphs = new();
     private readonly ParticleSystem _particleSystem = new();
     private readonly AudioSystem _audioSystem = new();
     private readonly BehaviorSystem _behaviorSystem = new();
@@ -48,9 +40,12 @@ public sealed class Game : IDisposable
     private string _assetSearchQuery = "";
     private int _assetFilterType = 0;
 
-    // Fyzika bezi jen kdyz je zapnuta tlacitkem. STOP = dispose celeho sveta,
-    // START = novy svet postaveny z aktualnich Transformu. Zadne rucni mazani teles.
-    private PhysicsWorld? _physics;
+    // Play mód (fyzika, controller, triggery, grafy) žije v PlayLoop (Fáze 40),
+    // rendering geometrií a stínů v SceneRenderer. _physics je jen forwarding
+    // pro čtení – zapisuje výhradně PlayLoop.
+    private PlayLoop _playLoop = null!;
+    private SceneRenderer _sceneRenderer = null!;
+    private PhysicsWorld? _physics => _playLoop.Physics;
 
     /// <summary>Scena se uklada do pracovniho adresare - pri 'dotnet run' je to slozka projektu.</summary>
     private static string ScenePath => Path.Combine(Environment.CurrentDirectory, "scene.json");
@@ -85,8 +80,7 @@ public sealed class Game : IDisposable
     private Action<Camera3D> _drawSceneCached = null!;
 
     private bool _altLooking;   // prave probiha Alt+tazeni (rozhlizeni)
-    private BepuPhysics.BodyHandle? _playerBody;
-    private int _playerEntity = -1;
+    // tělo/entitu hráče drží PlayLoop
 
     private float _assetScanTimer;
     private bool _resetLayout;
@@ -96,8 +90,13 @@ public sealed class Game : IDisposable
     // Kresleni pres DrawMesh s world matici = krychle konecne respektuji ROTACI
     // (DrawCubeV ji ignoroval) a dostanou stinovani.
     private LightingShader _lighting = null!;
-    private Mesh _cubeMesh;
-    private Material _cubeMaterial;
+    private MiniEngine.Lessons.LessonSystem _lessons = new();
+    private LessonPanel _lessonPanel = null!;
+    private MiniEngine.Editor.Panels.ExportPanel _exportPanel = null!;
+    private MiniEngine.Lessons.TeacherMode _teacherMode = null!;
+    private MiniEngine.Editor.Panels.TeacherPanel _teacherPanel = null!;
+    private MiniEngine.Editor.Panels.WelcomePanel _welcomePanel = null!;
+    private readonly MiniEngine.Editor.Panels.GuidedTour _guidedTour = new();
 
     private long _allocStart;
     private long _allocPerFrame;
@@ -109,12 +108,7 @@ public sealed class Game : IDisposable
         _renderers = _world.Store<MeshRenderer>();
         _names = _world.Store<Name>();
         _bodies = _world.Store<RigidBodyRef>();
-        _bodies.OnRemoved = (idx, r) => {
-            if (_physics != null)
-            {
-                _physics.Untrack(new BepuPhysics.BodyHandle(r.BodyHandle));
-            }
-        };
+        // OnRemoved (Untrack těles) nastavuje PlayLoop ve svém konstruktoru.
         _emitters = _world.Store<ParticleEmitter>();
         _audioSources = _world.Store<AudioSourceComponent>();
         _behaviors = _world.Store<BehaviorComponent>();
@@ -124,12 +118,14 @@ public sealed class Game : IDisposable
         _prefabLinks = _world.Store<PrefabLink>();
         _graphs = _world.Store<BehaviorGraphComponent>();
         _nodeEditor = new NodeEditorPanel(_world);
+        _playLoop = new PlayLoop(_world, _assets, _particleSystem, _audioSystem, _behaviorSystem);
     }
 
     public void Run()
     {
         Raylib.SetConfigFlags(ConfigFlags.ResizableWindow | ConfigFlags.Msaa4xHint | ConfigFlags.VSyncHint);
         Raylib.InitWindow(1600, 900, "MiniEngine");
+        Raylib.SetExitKey((KeyboardKey)0);
         Raylib.InitAudioDevice();
         Raylib.SetTargetFPS(0);   // VSync ridi tempo
 
@@ -140,6 +136,7 @@ public sealed class Game : IDisposable
         {
             var ioPtr = ImGui.GetIO();
             string fontPath = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "Roboto-Regular.ttf");
+            string iconFontPath = Path.Combine(AppContext.BaseDirectory, "assets", "fonts", "STIXGeneral.otf");
             if (File.Exists(fontPath))
             {
                 // Vyčistíme výchozí fonty, aby se náš font stal prvním a tedy výchozím
@@ -150,6 +147,7 @@ public sealed class Game : IDisposable
                 {
                     0x0020, 0x00FF, // Basic Latin + Latin-1 Supplement
                     0x0100, 0x017F, // Latin Extended-A (čeština - ěščřž atd.)
+                    0x2013, 0x2026, // pomlčky – —, uvozovky „“, výpustka …, odrážka •
                     0
                 };
                 int bytesCount = ranges.Length * sizeof(ushort);
@@ -164,6 +162,39 @@ public sealed class Game : IDisposable
                 }
 
                 ioPtr.Fonts.AddFontFromFileTTF(fontPath, 16f, null, nativeRanges);
+
+                // Načtení a sloučení ikonového písma pro glyfy (▶ ■ ↩ ↪)
+                if (File.Exists(iconFontPath))
+                {
+                    ushort[] iconRanges = new ushort[]
+                    {
+                        0x2190, 0x21FF, // Arrows block (obsahuje ↩, ↪)
+                        0x25A0, 0x25FF, // Geometric Shapes (obsahuje ▶, ■)
+                        0
+                    };
+                    int iconBytesCount = iconRanges.Length * sizeof(ushort);
+                    IntPtr nativeIconRanges = System.Runtime.InteropServices.Marshal.AllocHGlobal(iconBytesCount);
+                    unsafe
+                    {
+                        fixed (ushort* src = iconRanges)
+                        {
+                            byte* dest = (byte*)nativeIconRanges.ToPointer();
+                            System.Buffer.MemoryCopy(src, dest, iconBytesCount, iconBytesCount);
+                        }
+                    }
+
+                    unsafe
+                    {
+                        var configPtr = ImGuiNative.ImFontConfig_ImFontConfig();
+                        configPtr->MergeMode = 1;
+                        configPtr->PixelSnapH = 1;
+
+                        ioPtr.Fonts.AddFontFromFileTTF(iconFontPath, 16f, configPtr, nativeIconRanges);
+
+                        ImGuiNative.ImFontConfig_destroy(configPtr);
+                    }
+                }
+
                 rlImGui.ReloadFonts();
             }
         }
@@ -184,9 +215,7 @@ public sealed class Game : IDisposable
         _skybox = new SkyboxRenderer();
         _skybox.LoadSkybox("textures/skybox.jpg");
         _assets.DefaultShader = _lighting.Shader;   // kazdy nacteny model dostane osvetleni
-        _cubeMesh = Raylib.GenMeshCube(1f, 1f, 1f);
-        _cubeMaterial = Raylib.LoadMaterialDefault();
-        _cubeMaterial.Shader = _lighting.Shader;
+        _sceneRenderer = new SceneRenderer(_world, _assets, _lighting, _skybox, _particleSystem);
 
         _viewport = new EditorViewport();
         _camera = new EditorCamera();
@@ -196,7 +225,22 @@ public sealed class Game : IDisposable
         _inspector.OnChanged = OnInspectorOrPanelChanged;
         _inspector.OnRevertPrefab = RevertPrefab;
         _inspector.OnApplyPrefab = ApplyPrefab;
+        _playLoop.OnAfterPhysicsWriteback = () => _inspector.InvalidateRotationCache();
+        _lessons.LoadAll(Path.Combine(AppContext.BaseDirectory, "assets", "lessons"));
+        _teacherMode = new MiniEngine.Lessons.TeacherMode(_lessons);
+        _lessonPanel = new LessonPanel(_lessons, _teacherMode);
+        _teacherPanel = new MiniEngine.Editor.Panels.TeacherPanel(_teacherMode);
+        _exportPanel = new MiniEngine.Editor.Panels.ExportPanel(_assets);
+        _welcomePanel = new MiniEngine.Editor.Panels.WelcomePanel(_lessons);
         _lightPanel = new LightPanel(_lighting, _viewport.PostProcessor);
+        _inspector.LessonSystem = _lessons;
+        _lightPanel.LessonSystem = _lessons;
+        if (string.IsNullOrEmpty(_lessons.StudentName))
+        {
+            _welcomePanel.OpenPanel();
+        }
+        _welcomePanel.OnCompleted = _guidedTour.Start;
+        _viewport.OnStartGuidedTour = _guidedTour.Start;
         _drawSceneCached = DrawScene;
         _viewport.DrawToolbar = DrawViewportToolbar;   // jednou, ne per frame (delegat)
         _hierarchy.OnSave = SaveScene;
@@ -220,7 +264,7 @@ public sealed class Game : IDisposable
                     {
                         _assets.SetShader(i, _lighting.Shader);
                     }
-                    _cubeMaterial.Shader = _lighting.Shader;
+                    _sceneRenderer.RefreshShader();
                     _hierarchy.SceneStatus = "Shader uspesne hot-reloaded!";
                     ToastSystem.Show("Shader úspěšně hot-reloaded!");
                 }
@@ -252,87 +296,7 @@ public sealed class Game : IDisposable
 
             Update(dt);
 
-            // --- SHADOW PASS (CSM - 3 Kaskády) ---
-            RenderTexture2D shadowMapRT = new RenderTexture2D
-            {
-                Id = _lighting.ShadowFboId,
-                Texture = new Texture2D { Id = 0, Width = 4096, Height = 4096 },
-                Depth = new Texture2D { Id = _lighting.ShadowMapTexture.Id, Width = 4096, Height = 4096 }
-            };
-
-            Raylib.BeginTextureMode(shadowMapRT);
-            Rlgl.ColorMask(false, false, false, false);
-            Rlgl.ClearScreenBuffers();
-
-            // Kaskáda 0: Blízká (0.1m - 8m)
-            {
-                float radius;
-                Vector3 center;
-                ComputeCascadeBounds(_camera.Camera, 0.1f, 8.0f, out center, out radius);
-                
-                Camera3D shadowCamera = new Camera3D
-                {
-                    Position = center - Vector3.Normalize(_lighting.SunDirection) * (radius * 2.0f),
-                    Target = center,
-                    Up = MathF.Abs(_lighting.SunDirection.Y) < 0.99f ? Vector3.UnitY : Vector3.UnitZ,
-                    FovY = radius * 2.0f,
-                    Projection = CameraProjection.Orthographic
-                };
-
-                Rlgl.Viewport(0, 2048, 2048, 2048);
-                Raylib.BeginMode3D(shadowCamera);
-                _lighting.LightMvp0 = Rlgl.GetMatrixModelview() * Rlgl.GetMatrixProjection();
-                DrawSceneGeometries();
-                Raylib.EndMode3D();
-            }
-
-            // Kaskáda 1: Střední (8m - 25m)
-            {
-                float radius;
-                Vector3 center;
-                ComputeCascadeBounds(_camera.Camera, 8.0f, 25.0f, out center, out radius);
-                
-                Camera3D shadowCamera = new Camera3D
-                {
-                    Position = center - Vector3.Normalize(_lighting.SunDirection) * (radius * 2.0f),
-                    Target = center,
-                    Up = MathF.Abs(_lighting.SunDirection.Y) < 0.99f ? Vector3.UnitY : Vector3.UnitZ,
-                    FovY = radius * 2.0f,
-                    Projection = CameraProjection.Orthographic
-                };
-
-                Rlgl.Viewport(2048, 2048, 2048, 2048);
-                Raylib.BeginMode3D(shadowCamera);
-                _lighting.LightMvp1 = Rlgl.GetMatrixModelview() * Rlgl.GetMatrixProjection();
-                DrawSceneGeometries();
-                Raylib.EndMode3D();
-            }
-
-            // Kaskáda 2: Daleká (25m - 75m)
-            {
-                float radius;
-                Vector3 center;
-                ComputeCascadeBounds(_camera.Camera, 25.0f, 75.0f, out center, out radius);
-                
-                Camera3D shadowCamera = new Camera3D
-                {
-                    Position = center - Vector3.Normalize(_lighting.SunDirection) * (radius * 2.0f),
-                    Target = center,
-                    Up = MathF.Abs(_lighting.SunDirection.Y) < 0.99f ? Vector3.UnitY : Vector3.UnitZ,
-                    FovY = radius * 2.0f,
-                    Projection = CameraProjection.Orthographic
-                };
-
-                Rlgl.Viewport(0, 0, 2048, 2048);
-                Raylib.BeginMode3D(shadowCamera);
-                _lighting.LightMvp2 = Rlgl.GetMatrixModelview() * Rlgl.GetMatrixProjection();
-                DrawSceneGeometries();
-                Raylib.EndMode3D();
-            }
-
-            Rlgl.ColorMask(true, true, true, true);
-            Rlgl.Viewport(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
-            Raylib.EndTextureMode();
+            _sceneRenderer.ShadowPass(_camera.Camera);
 
             // 1) scena do offscreen textury
             _viewport.RenderScene(_camera.Camera, _drawSceneCached);
@@ -348,6 +312,42 @@ public sealed class Game : IDisposable
             Raylib.ClearBackground(new Color(18, 18, 20, 255));
 
             rlImGui.Begin();
+
+            if (Raylib.GetTime() % 2.0 < 0.02)
+            {
+                try
+                {
+                    System.IO.File.WriteAllText("window_debug.txt",
+                        $"Pos: {Raylib.GetWindowPosition()}\n" +
+                        $"Screen: {Raylib.GetScreenWidth()}x{Raylib.GetScreenHeight()}\n" +
+                        $"Render: {Raylib.GetRenderWidth()}x{Raylib.GetRenderHeight()}\n" +
+                        $"Fullscreen: {Raylib.IsWindowFullscreen()}\n" +
+                        $"Maximized: {Raylib.IsWindowMaximized()}\n" +
+                        $"DPI: {Raylib.GetWindowScaleDPI()}\n" +
+                        $"MousePos: {Raylib.GetMousePosition()}\n" +
+                        $"ImGuiMousePos: {ImGui.GetIO().MousePos}\n");
+                }
+                catch {}
+            }
+
+            // Oprava posunu myši na macOS v celoobrazovkovém režimu (způsobeno chováním GLFW a skrytou lištou)
+            if (OperatingSystem.IsMacOS())
+            {
+                var winPos = Raylib.GetWindowPosition();
+                if (winPos.X == 0 && winPos.Y <= 40f)
+                {
+                    var imGuiIo = ImGui.GetIO();
+                    imGuiIo.MousePos.Y -= winPos.Y;
+                }
+            }
+
+            if (_welcomePanel != null && _welcomePanel.Open)
+            {
+                _welcomePanel.Draw();
+                rlImGui.End();
+                Raylib.EndDrawing();
+                continue;
+            }
 
             // Sledování interakcí v editoru pro transakční historii (Undo/Redo)
             int selectedIndex = _selection.EntityIndex;
@@ -379,17 +379,21 @@ public sealed class Game : IDisposable
                 // Play / Stop
                 if (_physics == null)
                 {
-                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.6f, 0.3f, 1.0f));
-                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.15f, 0.7f, 0.35f, 1.0f));
-                    if (ImGui.Button(" PLAY Spustit ")) StartPhysics();
-                    ImGui.PopStyleColor(2);
+                    // 1a: zelené Přehrát s tmavým textem (glyf ▶ v atlasu není)
+                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.35f, 0.70f, 0.41f, 1.0f));
+                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.42f, 0.78f, 0.48f, 1.0f));
+                    ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.30f, 0.62f, 0.36f, 1.0f));
+                    ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.05f, 0.09f, 0.06f, 1.0f));
+                    if (ImGui.Button("  Přehrát  ")) StartPhysics();
+                    ImGui.PopStyleColor(4);
                 }
                 else
                 {
-                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.8f, 0.15f, 0.15f, 1.0f));
-                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.9f, 0.2f, 0.2f, 1.0f));
-                    if (ImGui.Button(" STOP Zastavit ")) StopPhysics();
-                    ImGui.PopStyleColor(2);
+                    ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.88f, 0.32f, 0.32f, 1.0f));
+                    ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.94f, 0.40f, 0.40f, 1.0f));
+                    ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.78f, 0.26f, 0.26f, 1.0f));
+                    if (ImGui.Button("  Zastavit  ")) StopPhysics();
+                    ImGui.PopStyleColor(3);
                 }
 
                 ImGui.SameLine();
@@ -397,7 +401,9 @@ public sealed class Game : IDisposable
                 ImGui.SameLine();
 
                 // Save / Load
-                if (ImGui.Button(" Uložit ")) SaveScene();
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.85f, 0.70f, 0.25f, 1.0f));
+                if (ImGui.Button(" Uložit scénu ")) SaveScene();
+                ImGui.PopStyleColor();
                 ImGui.SameLine();
                 if (ImGui.Button(" Načíst ")) LoadScene();
 
@@ -426,7 +432,29 @@ public sealed class Game : IDisposable
                 if (ImGui.Button(" Reset rozvržení ")) _resetLayout = true;
 
                 ImGui.SameLine();
-                ImGui.TextDisabled($"| Kroků zpět: {(canUndo ? "k dispozici" : "není k dispozici")}");
+                if (ImGui.Button(" Lekce ")) _lessonPanel.PickerOpen = true;
+
+                ImGui.SameLine();
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.85f, 0.70f, 0.25f, 1.0f));
+                if (ImGui.Button(" Exportovat hru ")) _exportPanel.Open = true;
+                ImGui.PopStyleColor();
+
+                // Tlačítko Profil (Pro nastavení jména a layoutu)
+                ImGui.SameLine(ImGui.GetWindowWidth() - 290f);
+                if (ImGui.Button(" Můj Profil ")) _welcomePanel?.OpenPanel();
+
+                // Nenánapné tlačítko „Učitel“ před badge (1a)
+                ImGui.SameLine(ImGui.GetWindowWidth() - 190f);
+                if (ImGui.Button(" Učitel ")) _teacherPanel.Open = true;
+
+                // Badge „Režim výuky" u pravého okraje (1a)
+                ImGui.SameLine(ImGui.GetWindowWidth() - 120f);
+                ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.85f, 0.70f, 0.25f, 0.16f));
+                ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.85f, 0.70f, 0.25f, 0.28f));
+                ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.85f, 0.70f, 0.25f, 0.38f));
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.85f, 0.70f, 0.25f, 1.0f));
+                if (ImGui.Button(" Režim výuky ")) _lessonPanel.PickerOpen = true;
+                ImGui.PopStyleColor(4);
             }
             ImGui.End();
 
@@ -467,6 +495,15 @@ public sealed class Game : IDisposable
             // Statistiky jako překryvná vrstva ve viewportu
             DrawViewportStatsOverlay();
 
+            // Výuková vrstva (Fáze 37) – panel lekce přes viewport
+            _lessonPanel.Draw(_viewport.Origin, new Vector2(_viewport.Width, _viewport.Height), _world, _selection, _camera);
+
+            // Exportní dialog (Fáze 39b)
+            _exportPanel.Draw(_world, ScenePath, _skybox.SkyboxTexturePath);
+
+            // Administrační panel učitele (Fáze 38)
+            _teacherPanel.Draw();
+
             // 4. Sjednocený pravý panel (Inspector & Nastavení)
             NextWindowRect(new Vector2(wp.X + ws.X - rightW, wp.Y), new Vector2(rightW, ws.Y));
             ImGui.Begin("Inspector & Nastavení");
@@ -497,15 +534,18 @@ public sealed class Game : IDisposable
                     DrawAssetBrowserInner();
                     ImGui.EndTabItem();
                 }
-                if (ImGui.BeginTabItem("Profiler & Výkon"))
+                if (_lessons.LayoutMode == "Pokrocily")
                 {
-                    _profiler.DrawInner();
-                    ImGui.EndTabItem();
-                }
-                if (ImGui.BeginTabItem("Visual Logic Editor"))
-                {
-                    _nodeEditor.DrawInner(_selection);
-                    ImGui.EndTabItem();
+                    if (ImGui.BeginTabItem("Profiler & Výkon"))
+                    {
+                        _profiler.DrawInner();
+                        ImGui.EndTabItem();
+                    }
+                    if (ImGui.BeginTabItem("Visual Logic Editor"))
+                    {
+                        _nodeEditor.DrawInner(_selection);
+                        ImGui.EndTabItem();
+                    }
                 }
                 ImGui.EndTabBar();
             }
@@ -515,6 +555,27 @@ public sealed class Game : IDisposable
 
             MiniEngine.Editor.ToastSystem.UpdateAndDraw(dt);
 
+            if (_guidedTour.Active)
+            {
+                var originalWp = mainVp.WorkPos;
+                var originalWs = mainVp.WorkSize;
+                
+                float tH = 36f;
+                float lW = MathF.Min(300f, originalWs.X * 0.20f);
+                float rW = MathF.Min(360f, originalWs.X * 0.24f);
+                float cW = originalWs.X - lW - rW;
+                float vH = (originalWs.Y - tH) * 0.62f;
+                float bH = (originalWs.Y - tH) - vH;
+
+                var hRect = new MiniEngine.Editor.Panels.TourRect(new Vector2(originalWp.X, originalWp.Y + tH), new Vector2(lW, originalWs.Y - tH));
+                var vRect = new MiniEngine.Editor.Panels.TourRect(new Vector2(originalWp.X + lW, originalWp.Y + tH), new Vector2(cW, vH));
+                var iRect = new MiniEngine.Editor.Panels.TourRect(new Vector2(originalWp.X + originalWs.X - rW, originalWp.Y + tH), new Vector2(rW, originalWs.Y - tH));
+                var bRect = new MiniEngine.Editor.Panels.TourRect(new Vector2(originalWp.X + lW, originalWp.Y + tH + vH), new Vector2(cW, bH));
+                var tRect = new MiniEngine.Editor.Panels.TourRect(originalWp, new Vector2(originalWs.X, tH));
+
+                _guidedTour.Draw(originalWs, hRect, vRect, iRect, bRect, tRect);
+            }
+
             rlImGui.End();
 
             Raylib.EndDrawing();
@@ -522,7 +583,7 @@ public sealed class Game : IDisposable
 
         StopPhysics();
         _assets.Dispose();    // GPU zdroje uvolnit PRED zavrenim okna (vraci materialum default shader)
-        Raylib.UnloadMesh(_cubeMesh);
+        _sceneRenderer.Dispose();
         _lighting.Dispose();
         _skybox.Dispose();
         _viewport.Dispose();
@@ -533,18 +594,11 @@ public sealed class Game : IDisposable
 
     private void Update(float dt)
     {
-        _behaviorSystem.Update(dt, _transforms, _behaviors, _bodies, _physics);
-        _particleSystem.Update(dt, _transforms, _emitters);
-        _audioSystem.Update(_camera.Camera, _transforms, _audioSources, _assets);
-        UpdateTriggers();
-
-        if (_physics is not null)
-        {
-            foreach (var kvp in _activeGraphs)
-            {
-                kvp.Value.Trigger("Event_OnUpdate", _world, kvp.Key, _physics);
-            }
-        }
+        // Simulace Play módu (behavior, částice, audio, triggery, grafy,
+        // controller, fyzika) – vytaženo do PlayLoop (Fáze 40).
+        _playLoop.Update(dt, ref _camera.Camera, EditorViewport.GameKeyboardAllowed);
+        _lessons.Update(_world, _selection, dt);
+        _teacherMode.Update(dt);
 
         _assetScanTimer += dt;
         if (_assetScanTimer > 2f)
@@ -617,197 +671,13 @@ public sealed class Game : IDisposable
             }
         }
 
-        // Fyzika: fixed timestep + interpolace, tela jsou zdroj pravdy pro Transform.
-        // Fyzika mysli ve WORLD prostoru - u deti v hierarchii se poza prepocita
-        // na lokalni pres rodicovu World matici (z minuleho framu, to je ok).
-        if (_physics is not null)
-        {
-            if (_playerBody.HasValue && _physics.Simulation.Bodies.BodyExists(_playerBody.Value))
-            {
-                var bodyRef = _physics.Simulation.Bodies[_playerBody.Value];
-                Vector3 currentVel = bodyRef.Velocity.Linear;
-
-                Vector3 camDir = new Vector3(_camera.Camera.Target.X - _camera.Camera.Position.X, 0f, _camera.Camera.Target.Z - _camera.Camera.Position.Z);
-                Vector3 camForward = camDir.LengthSquared() > 0.001f ? Vector3.Normalize(camDir) : new Vector3(0f, 0f, -1f);
-                Vector3 camRight = Vector3.Normalize(Vector3.Cross(camForward, _camera.Camera.Up));
-
-                Vector3 moveDir = Vector3.Zero;
-                if (Raylib.IsKeyDown(KeyboardKey.W)) moveDir += camForward;
-                if (Raylib.IsKeyDown(KeyboardKey.S)) moveDir -= camForward;
-                if (Raylib.IsKeyDown(KeyboardKey.D)) moveDir += camRight;
-                if (Raylib.IsKeyDown(KeyboardKey.A)) moveDir -= camRight;
-
-                if (moveDir != Vector3.Zero)
-                    moveDir = Vector3.Normalize(moveDir);
-
-                float speed = 8f;
-                Vector3 targetVel = moveDir * speed;
-
-                bodyRef.Velocity.Linear = new Vector3(targetVel.X, currentVel.Y, targetVel.Z);
-
-                if (Raylib.IsKeyPressed(KeyboardKey.Space) && MathF.Abs(currentVel.Y) < 0.1f)
-                {
-                    bodyRef.Velocity.Linear = new Vector3(bodyRef.Velocity.Linear.X, 6f, bodyRef.Velocity.Linear.Z);
-                }
-
-                Vector3 playerPos = bodyRef.Pose.Position;
-                Vector3 camOffset = _camera.Camera.Position - _camera.Camera.Target;
-                _camera.Camera.Target = playerPos;
-                _camera.Camera.Position = playerPos + camOffset;
-            }
-
-            float alpha = _physics.Step(dt);
-
-            var bodies = _bodies.Span;
-            var bodyEntities = _bodies.Entities;
-            for (int i = 0; i < bodies.Length; i++)
-            {
-                ref var b = ref bodies[i];
-                var (pos, rot) = _physics.GetInterpolated(new BodyHandle(b.BodyHandle), alpha);
-                Vector3 visualPos = pos - Vector3.Transform(b.CenterOffset, rot);
-                TransformHierarchy.SetWorldPosition(_transforms, bodyEntities[i], visualPos);
-                TransformHierarchy.SetWorldRotation(_transforms, bodyEntities[i], rot);
-            }
-
-            _inspector.InvalidateRotationCache();
-        }
-
         _assets.UpdateHotReload();
         _transformSystem.UpdateWorldMatrices(_transforms);
     }
 
-    private void StartPhysics()
-    {
-        _physics = new PhysicsWorld();
+    private void StartPhysics() => _playLoop.Start();
 
-        // Neviditelna podlaha v urovni gridu, at je kam padat.
-        _physics.AddStaticBox(new Vector3(0f, -0.25f, 0f), new Vector3(400f, 0.5f, 400f));
-
-        int playerIdx = -1;
-        var names = _names.Span;
-        var nameEntities = _names.Entities;
-        for (int i = 0; i < names.Length; i++)
-        {
-            if (string.Equals(names[i].Value, "Player", StringComparison.OrdinalIgnoreCase))
-            {
-                playerIdx = nameEntities[i];
-                break;
-            }
-        }
-
-        // Kazda viditelna entita s rendererem dostane dynamicke telo.
-        var renderers = _renderers.Span;
-        var entities = _renderers.Entities;
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            ref var r = ref renderers[i];
-            if (!r.Visible) continue;
-
-            int idx = entities[i];
-            if (!_transforms.Has(idx)) continue;
-
-            ref var t = ref _transforms.Get(idx);
-
-            var worldScale = TransformHierarchy.WorldScale(t.World);
-            float mass = MathF.Max(0.1f, worldScale.X * worldScale.Y * worldScale.Z);
-
-            if (idx == playerIdx)
-            {
-                float radius = 0.4f;
-                float height = 1.0f;
-                var handle = _physics.AddCharacter(
-                    t.World.Translation,
-                    radius, height, mass);
-                _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false, CenterOffset = Vector3.Zero });
-                _playerBody = handle;
-                _playerEntity = idx;
-            }
-            else if (r.ModelHandle >= 0)
-            {
-                ref Model m = ref _assets.Get(r.ModelHandle);
-                var vertexList = new System.Collections.Generic.List<Vector3>();
-
-                unsafe
-                {
-                    for (int mi = 0; mi < m.MeshCount; mi++)
-                    {
-                        ref var mesh = ref m.Meshes[mi];
-                        if (mesh.Vertices != null && mesh.VertexCount > 0)
-                        {
-                            for (int vi = 0; vi < mesh.VertexCount; vi++)
-                            {
-                                float x = mesh.Vertices[vi * 3];
-                                float y = mesh.Vertices[vi * 3 + 1];
-                                float z = mesh.Vertices[vi * 3 + 2];
-                                vertexList.Add(new Vector3(x * worldScale.X, y * worldScale.Y, z * worldScale.Z));
-                            }
-                        }
-                    }
-                }
-
-                if (vertexList.Count > 0)
-                {
-                    var handle = _physics.AddDynamicConvexHull(
-                        t.World.Translation,
-                        TransformHierarchy.WorldRotation(_transforms, idx),
-                        vertexList.ToArray(), mass, out var center);
-                    _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false, CenterOffset = center });
-                }
-                else
-                {
-                    var handle = _physics.AddDynamicBox(
-                        t.World.Translation,
-                        TransformHierarchy.WorldRotation(_transforms, idx),
-                        worldScale, mass);
-                    _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false, CenterOffset = Vector3.Zero });
-                }
-            }
-            else
-            {
-                var handle = _physics.AddDynamicBox(
-                    t.World.Translation,
-                    TransformHierarchy.WorldRotation(_transforms, idx),
-                    worldScale, mass);
-                _bodies.Add(idx, new RigidBodyRef { BodyHandle = handle.Value, IsKinematic = false, CenterOffset = Vector3.Zero });
-            }
-        }
-
-        // Inicializujeme aktivní behavior grafy
-        _activeGraphs.Clear();
-        var graphEntities = _graphs.Entities;
-        var graphSpan = _graphs.Span;
-        for (int i = 0; i < graphSpan.Length; i++)
-        {
-            ref var comp = ref graphSpan[i];
-            if (comp.Enabled && !string.IsNullOrEmpty(comp.GraphJson))
-            {
-                try
-                {
-                    var g = System.Text.Json.JsonSerializer.Deserialize(comp.GraphJson, SceneJsonContext.Default.BehaviorGraph);
-                    if (g != null)
-                    {
-                        int ent = graphEntities[i];
-                        g.InitializeRuntime(_world, ent, _physics);
-                        _activeGraphs[ent] = g;
-                        g.Trigger("Event_OnStart", _world, ent, _physics);
-                    }
-                }
-                catch {}
-            }
-        }
-    }
-
-    private void StopPhysics()
-    {
-        _physics?.Dispose();
-        _physics = null;
-        _bodies.Clear();   // Transformy zustanou tam, kde tela dopadla
-        _playerBody = null;
-        _playerEntity = -1;
-        _audioSystem.StopAll(_audioSources, _assets);
-        _behaviorSystem.RestoreInitialStates(_transforms, _behaviors);
-        _activeGraphs.Clear();
-    }
+    private void StopPhysics() => _playLoop.Stop();
 
     private void SaveScene()
     {
@@ -961,6 +831,7 @@ public sealed class Game : IDisposable
         if (ImGui.Combo("##RenderMode", ref currentMode, renderModes, renderModes.Length))
         {
             _renderMode = (RenderMode)currentMode;
+            _sceneRenderer.Mode = _renderMode;
         }
         ImGui.PopItemWidth();
 
@@ -997,176 +868,9 @@ public sealed class Game : IDisposable
         if (active) ImGui.PopStyleColor();
     }
 
-    private void DrawSceneGeometries()
-    {
-        var transforms = _transforms.Span;
-        var renderers = _renderers.Span;
-        var entities = _renderers.Entities;
-
-        Shader currentShader = (_renderMode == RenderMode.Lit) ? _lighting.Shader : default;
-        if (_renderMode == RenderMode.Wireframe)
-        {
-            Rlgl.EnableWireMode();
-        }
-
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            ref var r = ref renderers[i];
-            if (!r.Visible) continue;
-
-            ref var t = ref _transforms.Get(entities[i]);
-
-            if (r.ModelHandle >= 0)
-            {
-                var world = Matrix4x4.Transpose(t.World);
-                ref Model m = ref _assets.Get(r.ModelHandle);
-
-                Texture2D texOverride = default;
-                if (!string.IsNullOrEmpty(r.AlbedoTexturePath))
-                {
-                    texOverride = _assets.GetTexture(r.AlbedoTexturePath);
-                }
-
-                unsafe
-                {
-                    for (int mi = 0; mi < m.MeshCount; mi++)
-                    {
-                        ref var mat = ref m.Materials[m.MeshMaterial[mi]];
-                        Shader origShader = mat.Shader;
-                        mat.Shader = currentShader;
-
-                        Color origColor = mat.Maps[(int)MaterialMapIndex.Albedo].Color;
-                        Texture2D origTex = mat.Maps[(int)MaterialMapIndex.Albedo].Texture;
-                        Texture2D origNormal = mat.Maps[(int)MaterialMapIndex.Normal].Texture;
-                        Texture2D origRoughness = mat.Maps[(int)MaterialMapIndex.Roughness].Texture;
-
-                        byte rVal = (byte)Math.Clamp(origColor.R * r.Tint.X, 0f, 255f);
-                        byte gVal = (byte)Math.Clamp(origColor.G * r.Tint.Y, 0f, 255f);
-                        byte bVal = (byte)Math.Clamp(origColor.B * r.Tint.Z, 0f, 255f);
-                        mat.Maps[(int)MaterialMapIndex.Albedo].Color = new Color(rVal, gVal, bVal, origColor.A);
-
-                        if (texOverride.Id > 0)
-                        {
-                            mat.Maps[(int)MaterialMapIndex.Albedo].Texture = texOverride;
-                        }
-
-                        // Normal map
-                        bool hasNormal = !string.IsNullOrEmpty(r.NormalMapPath);
-                        if (hasNormal)
-                        {
-                            var normTex = _assets.GetTexture(r.NormalMapPath);
-                            if (normTex.Id > 0)
-                            {
-                                mat.Maps[(int)MaterialMapIndex.Normal].Texture = normTex;
-                            }
-                            else hasNormal = false;
-                        }
-                        Raylib.SetShaderValue(_lighting.Shader, _lighting.LocHasNormalMap, hasNormal ? 1 : 0, ShaderUniformDataType.Int);
-
-                        // Metallic/Roughness map
-                        bool hasMR = !string.IsNullOrEmpty(r.MetallicRoughnessMapPath);
-                        if (hasMR)
-                        {
-                            var mrTex = _assets.GetTexture(r.MetallicRoughnessMapPath);
-                            if (mrTex.Id > 0)
-                            {
-                                mat.Maps[(int)MaterialMapIndex.Roughness].Texture = mrTex;
-                            }
-                            else hasMR = false;
-                        }
-                        Raylib.SetShaderValue(_lighting.Shader, _lighting.LocHasMetallicRoughnessMap, hasMR ? 1 : 0, ShaderUniformDataType.Int);
-
-                        // Factors
-                        Raylib.SetShaderValue(_lighting.Shader, _lighting.LocMetallicFactor, r.MetallicFactor, ShaderUniformDataType.Float);
-                        Raylib.SetShaderValue(_lighting.Shader, _lighting.LocRoughnessFactor, r.RoughnessFactor, ShaderUniformDataType.Float);
-
-                        Raylib.DrawMesh(m.Meshes[mi], mat, world);
-
-                        mat.Shader = origShader;
-                        mat.Maps[(int)MaterialMapIndex.Albedo].Color = origColor;
-                        mat.Maps[(int)MaterialMapIndex.Albedo].Texture = origTex;
-                        mat.Maps[(int)MaterialMapIndex.Normal].Texture = origNormal;
-                        mat.Maps[(int)MaterialMapIndex.Roughness].Texture = origRoughness;
-                    }
-                }
-            }
-            else
-            {
-                var color = new Color((byte)(r.Tint.X * 255), (byte)(r.Tint.Y * 255), (byte)(r.Tint.Z * 255), (byte)255);
-
-                Texture2D texOverride = default;
-                if (!string.IsNullOrEmpty(r.AlbedoTexturePath))
-                {
-                    texOverride = _assets.GetTexture(r.AlbedoTexturePath);
-                }
-
-                unsafe
-                {
-                    _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Color = color;
-                    Texture2D origTex = _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Texture;
-                    Texture2D origNormal = _cubeMaterial.Maps[(int)MaterialMapIndex.Normal].Texture;
-                    Texture2D origRoughness = _cubeMaterial.Maps[(int)MaterialMapIndex.Roughness].Texture;
-
-                    if (texOverride.Id > 0)
-                    {
-                        _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Texture = texOverride;
-                    }
-
-                    // Normal map
-                    bool hasNormal = !string.IsNullOrEmpty(r.NormalMapPath);
-                    if (hasNormal)
-                    {
-                        var normTex = _assets.GetTexture(r.NormalMapPath);
-                        if (normTex.Id > 0)
-                            _cubeMaterial.Maps[(int)MaterialMapIndex.Normal].Texture = normTex;
-                        else hasNormal = false;
-                    }
-                    Raylib.SetShaderValue(_lighting.Shader, _lighting.LocHasNormalMap, hasNormal ? 1 : 0, ShaderUniformDataType.Int);
-
-                    // Metallic/Roughness map
-                    bool hasMR = !string.IsNullOrEmpty(r.MetallicRoughnessMapPath);
-                    if (hasMR)
-                    {
-                        var mrTex = _assets.GetTexture(r.MetallicRoughnessMapPath);
-                        if (mrTex.Id > 0)
-                            _cubeMaterial.Maps[(int)MaterialMapIndex.Roughness].Texture = mrTex;
-                        else hasMR = false;
-                    }
-                    Raylib.SetShaderValue(_lighting.Shader, _lighting.LocHasMetallicRoughnessMap, hasMR ? 1 : 0, ShaderUniformDataType.Int);
-
-                    Raylib.SetShaderValue(_lighting.Shader, _lighting.LocMetallicFactor, r.MetallicFactor, ShaderUniformDataType.Float);
-                    Raylib.SetShaderValue(_lighting.Shader, _lighting.LocRoughnessFactor, r.RoughnessFactor, ShaderUniformDataType.Float);
-
-                    _cubeMaterial.Shader = currentShader;
-                    Raylib.DrawMesh(_cubeMesh, _cubeMaterial, Matrix4x4.Transpose(t.World));
-
-                    _cubeMaterial.Maps[(int)MaterialMapIndex.Albedo].Texture = origTex;
-                    _cubeMaterial.Maps[(int)MaterialMapIndex.Normal].Texture = origNormal;
-                    _cubeMaterial.Maps[(int)MaterialMapIndex.Roughness].Texture = origRoughness;
-                }
-            }
-        }
-
-        if (_renderMode == RenderMode.Wireframe)
-        {
-            Rlgl.DisableWireMode();
-        }
-    }
-
     private void DrawScene(Camera3D camera)
     {
-        _skybox.Draw(camera);
-
-        _lighting.Apply(camera);   // viewPos + parametry slunce do shaderu
-
-        if (_showGrid && _gridSpacing > 0f)
-        {
-            Raylib.DrawGrid((int)(40f / _gridSpacing), _gridSpacing);
-        }
-
-        DrawSceneGeometries();
-
-        _particleSystem.Draw(camera, _assets);
+        _sceneRenderer.DrawBase(camera, _showGrid, _gridSpacing);
 
         // Vizuální 3D helpery v editoru (pouze když fyzika neběží)
         if (_physics is null)
@@ -1561,16 +1265,8 @@ public sealed class Game : IDisposable
             ));
         }
 
-        // 3. Speciální chování pro hráče
-        if (idx == _playerEntity)
-        {
-            var prevPlayerEntity = _playerEntity;
-            var prevPlayerBody = _playerBody;
-            cmd.Add(new MiniEngine.Editor.History.DelegateCommand(
-                () => { _playerEntity = -1; _playerBody = null; },
-                () => { _playerEntity = prevPlayerEntity; _playerBody = prevPlayerBody; }
-            ));
-        }
+        // 3. (Speciální undo pro hráče odstraněno – tělo/entitu hráče drží PlayLoop
+        //    a mazání je za běhu fyziky blokované, takže tu byl mrtvý kód.)
 
         // 4. Záloha a odstranění všech komponent
         var oldSnap = MiniEngine.Editor.History.EntitySnapshot.Capture(_world, idx);
@@ -2451,112 +2147,6 @@ public sealed class Game : IDisposable
         }
     }
 
-    private void UpdateTriggers()
-    {
-        var triggersSpan = _triggers.Span;
-        var triggerEntities = _triggers.Entities;
-        Vector3 camPos = _camera.Camera.Position;
-
-        for (int i = 0; i < triggersSpan.Length; i++)
-        {
-            ref var trigger = ref triggersSpan[i];
-            if (!trigger.Active) continue;
-
-            int triggerEnt = triggerEntities[i];
-            if (!_transforms.Has(triggerEnt)) continue;
-
-            Vector3 triggerPos = _transforms.Get(triggerEnt).World.Translation;
-            Vector3 min = triggerPos - trigger.Size * 0.5f;
-            Vector3 max = triggerPos + trigger.Size * 0.5f;
-
-            // Kontrola kamery
-            bool isCameraInside =
-                camPos.X >= min.X && camPos.X <= max.X &&
-                camPos.Y >= min.Y && camPos.Y <= max.Y &&
-                camPos.Z >= min.Z && camPos.Z <= max.Z;
-
-            // Kontrola ostatních objektů ve scéně
-            bool isAnyOtherEntityInside = false;
-            var transformsSpan = _transforms.Span;
-            var transformEntities = _transforms.Entities;
-            for (int j = 0; j < transformsSpan.Length; j++)
-            {
-                int otherEnt = transformEntities[j];
-                if (otherEnt == triggerEnt) continue;
-
-                // Nepočítat přímé děti/rodiče triggeru, abychom se netriggerovali sami
-                if (_transforms.Get(otherEnt).Parent == triggerEnt || _transforms.Get(triggerEnt).Parent == otherEnt)
-                    continue;
-
-                Vector3 otherPos = transformsSpan[j].World.Translation;
-                if (otherPos.X >= min.X && otherPos.X <= max.X &&
-                    otherPos.Y >= min.Y && otherPos.Y <= max.Y &&
-                    otherPos.Z >= min.Z && otherPos.Z <= max.Z)
-                {
-                    isAnyOtherEntityInside = true;
-                    break;
-                }
-            }
-
-            bool currentlyTriggered = isCameraInside || isAnyOtherEntityInside;
-            if (currentlyTriggered && !trigger.WasTriggered)
-            {
-                if (_activeGraphs.TryGetValue(triggerEnt, out var gTrigger))
-                {
-                    gTrigger.Trigger("Event_OnCollision", _world, triggerEnt, _physics, trigger.TargetEntity);
-                }
-                if (trigger.TargetEntity >= 0 && _activeGraphs.TryGetValue(trigger.TargetEntity, out var gTarget))
-                {
-                    gTarget.Trigger("Event_OnCollision", _world, trigger.TargetEntity, _physics, triggerEnt);
-                }
-
-                // Vstup do zóny -> Vyvolat akci
-                if (trigger.TargetEntity >= 0 && _actions.Has(trigger.TargetEntity))
-                {
-                    ref var action = ref _actions.Get(trigger.TargetEntity);
-                    if (action.Active)
-                    {
-                        ExecuteAction(trigger.TargetEntity, ref action);
-                    }
-                }
-            }
-            trigger.WasTriggered = currentlyTriggered;
-        }
-    }
-
-    private void ExecuteAction(int targetEntity, ref ActionComponent action)
-    {
-        if (action.ActionType == 0) // Spustit zvuk
-        {
-            if (_audioSources.Has(targetEntity))
-            {
-                ref var src = ref _audioSources.Get(targetEntity);
-                src.Active = true;
-            }
-            else if (!string.IsNullOrEmpty(action.ActionParam))
-            {
-                var sound = _assets.GetSound(action.ActionParam);
-                Raylib.PlaySound(sound);
-            }
-        }
-        else if (action.ActionType == 1) // Přepnout částice
-        {
-            if (_emitters.Has(targetEntity))
-            {
-                ref var em = ref _emitters.Get(targetEntity);
-                em.Active = !em.Active;
-            }
-        }
-        else if (action.ActionType == 2) // Přepnout viditelnost
-        {
-            if (_renderers.Has(targetEntity))
-            {
-                ref var rend = ref _renderers.Get(targetEntity);
-                rend.Visible = !rend.Visible;
-            }
-        }
-    }
-
     private unsafe void DrawAssetBrowserPanel()
     {
         ImGui.Begin("Asset Browser");
@@ -2702,50 +2292,6 @@ public sealed class Game : IDisposable
             }
         }
         ImGui.EndChild();
-    }
-
-    private void ComputeCascadeBounds(Camera3D camera, float nearSplit, float farSplit, out Vector3 center, out float radius)
-    {
-        Vector3 camPos = camera.Position;
-        Vector3 camTarget = camera.Target;
-        Vector3 camForward = Vector3.Normalize(camTarget - camPos);
-        Vector3 camRight = Vector3.Normalize(Vector3.Cross(camForward, camera.Up));
-        Vector3 camUp = Vector3.Cross(camRight, camForward);
-
-        float fovRad = camera.FovY * MathF.PI / 180f;
-        float aspect = 1600f / 900f; // Standardní aspect ratio pro výpočet frusta
-
-        float nearHeight = 2f * MathF.Tan(fovRad / 2f) * nearSplit;
-        float nearWidth = nearHeight * aspect;
-        float farHeight = 2f * MathF.Tan(fovRad / 2f) * farSplit;
-        float farWidth = farHeight * aspect;
-
-        Vector3 nearCenter = camPos + camForward * nearSplit;
-        Vector3 farCenter = camPos + camForward * farSplit;
-
-        Vector3[] corners = new Vector3[8];
-        corners[0] = nearCenter + (camUp * nearHeight * 0.5f) - (camRight * nearWidth * 0.5f);
-        corners[1] = nearCenter + (camUp * nearHeight * 0.5f) + (camRight * nearWidth * 0.5f);
-        corners[2] = nearCenter - (camUp * nearHeight * 0.5f) - (camRight * nearWidth * 0.5f);
-        corners[3] = nearCenter - (camUp * nearHeight * 0.5f) + (camRight * nearWidth * 0.5f);
-
-        corners[4] = farCenter + (camUp * farHeight * 0.5f) - (camRight * farWidth * 0.5f);
-        corners[5] = farCenter + (camUp * farHeight * 0.5f) + (camRight * farWidth * 0.5f);
-        corners[6] = farCenter - (camUp * farHeight * 0.5f) - (camRight * farWidth * 0.5f);
-        corners[7] = farCenter - (camUp * farHeight * 0.5f) + (camRight * farWidth * 0.5f);
-
-        center = Vector3.Zero;
-        foreach (var c in corners) center += c;
-        center /= 8f;
-
-        radius = 0f;
-        foreach (var c in corners)
-        {
-            float dist = Vector3.Distance(c, center);
-            if (dist > radius) radius = dist;
-        }
-        
-        radius = MathF.Ceiling(radius * 8f) / 8f;
     }
 
     public void Dispose() { }

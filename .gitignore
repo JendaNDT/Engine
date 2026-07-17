@@ -9,3 +9,8 @@ scene.json
 
 # macOS
 .DS_Store
+
+# Build artifacts & local tools
+MiniEngine_Installer.dmg
+.dotnet_home/
+window_debug.txt
