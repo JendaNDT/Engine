@@ -39,9 +39,11 @@ Nápověda k ovládání je zobrazena přímo v pravém horním rohu 3D viewport
   * Přetáhni libovolný model `.glb` z dolního **Asset Browseru** přímo do 3D viewportu pro spawn na zemi pod kurzorem.
   * Přetáhni entitu na druhou v panelu **Hierarchy** pro vytvoření hierarchické vazby.
 
-## 3b. Po aktualizaci kódu (smazání starého rozvržení)
+## 3b. Resetování rozvržení oken
 
-Pokud se ti rozloží okna nesprávně z důvodu staré konfigurace z předchozích verzí, smaž uložený soubor `imgui.ini` a spusť engine znovu:
+Pokud se panely v editoru rozloží nesprávně (např. vlivem načtení staré konfigurace v souboru `imgui.ini`), můžeš jejich rozvržení okamžitě vrátit do výchozího stavu pomocí tlačítka **Reset rozvržení** v horní liště (Toolbar).
+
+Pokud by tlačítko nepomohlo, je možné smazat konfigurační soubor `imgui.ini` ručně a spustit engine znovu:
 
 ```bash
 cd ~/Desktop/Engine/MiniEngine/src/MiniEngine
@@ -49,7 +51,7 @@ rm -f imgui.ini
 dotnet run
 ```
 
-Panely se otevřou ve výchozím rozvržení: Hierarchy vlevo, Viewport uprostřed, Inspector vpravo, Stats/Profiler vlevo dole. Rozvržení si můžeš libovolně upravit přetažením panelů za záhlaví.
+Panely se otevřou ve výchozím rozvržení: Hierarchy vlevo, Viewport uprostřed, Inspector/Svetlo vpravo, široký spodní panel (Asset Browser, Profiler, Node Editor) dole. Rozvržení si můžeš libovolně upravit přetažením panelů za jejich záhlaví.
 
 ## 3c. Ukládání a načítání scény
 

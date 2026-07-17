@@ -1,5 +1,5 @@
 # MiniEngine – Project Status
-*Naposledy aktualizováno: 16. 7. 2026 (Dvacátá iterace – Audit, stabilizace a optimalizace)*
+*Naposledy aktualizováno: 17. 7. 2026 (Stabilizace, Prefaby, Behavior Node Graph, Duplikace a UI/UX)*
 
 ## 🎯 Co to je
 Nativní C# 3D herní engine s editorem, plně multiplatformní (Windows x64 a macOS Apple Silicon ARM64) s plnou podporou kompilace **Native AOT** pro maximální výkon a nulové spouštěcí závislosti.
@@ -55,21 +55,34 @@ Nativní C# 3D herní engine s editorem, plně multiplatformní (Windows x64 a m
 * **Dropdown výběr assetů (Fáze 13)**: Ruční přepisování cest k souborům v inspektoru nahrazeno Combo Boxy se seznamy reálně nalezených souborů na disku. Tlačítko pro obnovení seznamu souborů za chodu.
 * **Help Overlay (Fáze 19)**: Minimalizovatelný překryvný panel s nápovědou ovládání kamery a klávesových zkratek v pravém horním rohu viewportu.
 
-### 7. Audit, stabilizace a optimalizace (Fáze 20)
-* **Ošetření chyb a pádů**:
-  - Přidána robustní kontrola existence fyzikálních těles před přístupem k jejich referencím v BepuPhysics.
-  - Zablokovány veškeré destruktivní a strukturní změny scény (mazání, tvorba, duplikace, prefaby, změny rodičů) za běhu fyzikální simulace.
-  - Zavedena pojistka proti StackOverflowException při detekci zacyklení hierarchie rodičovství na úrovni UI panelu i jádra.
-  - Vstupní pole pro přejmenování reaguje na klávesu `Escape`, která okamžitě zruší editaci bez uložení změn.
-* **Prostorový úklid unmanaged paměti**:
-  - Důsledné uvolňování unmanaged rigidních těles z fyzikální simulace BepuPhysics a mazání referenčních typů ze Sparse-Set ECS polí při smazání objektu.
-  - Recyklace indexů uvolněných 3D modelů v `AssetManager` pomocí Free-Listu zabraňující neomezenému růstu polí.
-  - Uvolňování nepoužívaných textur a zvukových bufferů z GPU/RAM paměti při resetování nebo načítání nové scény.
-* **Zamezení GC alokací & Zpomalování**:
-  - Kešování polí comboboxů pro výběr textur a zvuků odstraňující periodické snímkové alokace.
-  - Throttling (deaktivace) odesílání `OnChanged` události u světel a post-processingu, spouštějící se až po uvolnění slideru, nikoliv během každého snímku tažení.
-  - Výpočet pickování otočených krychlí v lokálním prostoru pomocí inverze matice.
-  - Dynamické měřítko v Profiler grafu dle historických maxim s 10% rezervou a rozdělení překryvu Stats/Profiler oken.
+### 7. Audit, stabilizace a optimalizace (Fáze 20 - 36)
+* **Zero-Allocation Undo/Redo (Fáze 21)**:
+  - Optimalizovaný vzor Command Pattern (`IEditorCommand`, `CommandHistory`, `EntitySnapshot`, `CompositeCommand`) zaznamenávající pouze konkrétní rozdíly komponent, čímž eliminuje GC alokace v hlavní smyčce.
+* **ACES PBR Vykreslování & CSM (Fáze 22, 24)**:
+  - Cook-Torrance GGX specular BRDF, ACES Filmic tonemapping, albedo/normal/metallic-roughness textury integrované do standardního rendering řetězce.
+  - Kaskádové stíny (CSM) se stínovým atlasem **4096x4096px** rozděleným na 3 kaskády, se stabilizací shadow kamer pro eliminaci chvění stínů a PCF filtrací.
+* **Dědičnost a propojení prefabů (Fáze 23)**:
+  - Komponenta `PrefabLink` ukládající relativní cestu k blueprintu a přepsané vlastnosti. Propagace a rehydratace instancí prefabu pomocí DFS vyhodnocení.
+  - Tlačítka **Revert to Prefab** a **Apply to Prefab** v inspektoru.
+* **Vizuální editor logiky - Behavior Node Graph (Fáze 25)**:
+  - Grafický editor v `NodeEditorPanel.cs` pro navrhování logiky s interpretovaným `BehaviorGraph.cs`, napojeným na trigger zóny, kolize a start/update eventy.
+* **Optimalizace rozvržení a UX (Fáze 26)**:
+  - Globální Toolbar (Play/Stop, Undo/Redo, tlačítko pro Reset rozvržení oken), Stats overlay, sloučený panel Inspector + Světlo na pravé straně.
+  - Široký spodní panel pro Asset Browser + Profiler + Node Editor, a vyhledávací lišta v panelu Hierarchy.
+* **Fyzikální a Audio stabilita (Fáze 27, 28)**:
+  - ECS `OnRemoved` callback uvolňující tělesa z BepuPhysics simulace (`Untrack`), což zabraňuje únikům těles a duchům ve scéně.
+  - Raylib sound aliasy zamezující konfliktům hlasitosti a pitchů. Prevence `NaN` ve fyzikálních a audio systémech.
+* **Asset Garbage Collection & ECS optimalizace (Fáze 29, 30)**:
+  - Periodické čištění nepoužívaných textur a zvuků z RAM/VRAM každé 2 sekundy (`CollectUnusedAssets`).
+  - Free-list pro recyklaci modelových indexů, uvolnění referencí stringů v generic `Store<T>.RemoveAt`.
+* **UX, zkratky a AOT opravy (Fáze 31 - 36)**:
+  - SpawnRate limitace částic (nekonečný cyklus), přejmenování hierarchie (Escape), viewport zkratky (Delete, Backspace).
+  - AOT serializační warningy a typově bezpečné JSON operace (`SceneJsonContext`).
+  - Zacyklení hierarchie (IsDescendantOf), frame overflow ochrana čítače `_frame`.
+  - Hluboká duplikace všech komponent s remapováním cílů v `DuplicateSelected`.
+  - Zabezpečení myši (Mouse Lockout) na ztrátu fokusu a `transforms.Has` validace.
+  - OnChanged v `LightPanel.cs`, deserializační validace v `SceneSerializer.cs`, podpora triggerů bez Name.
+  - Inkrementální Toast IDs proti problikávání, ImGuiTheme tabs styling, ukotvená drop-zóna.
 
 ---
 
