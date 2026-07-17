@@ -704,6 +704,8 @@ public sealed class Game : IDisposable
             if (!r.Visible) continue;
 
             int idx = entities[i];
+            if (!_transforms.Has(idx)) continue;
+
             ref var t = ref _transforms.Get(idx);
 
             var worldScale = TransformHierarchy.WorldScale(t.World);
@@ -1475,16 +1477,33 @@ public sealed class Game : IDisposable
                 cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<AudioSourceComponent>(_audioSources, dest.Index, null, _audioSources.Get(src)));
             }
 
-            // Zkopirujeme TriggerComponent
+            // Zkopirujeme TriggerComponent s remapováním cílů
             if (_triggers.Has(src))
             {
-                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<TriggerComponent>(_triggers, dest.Index, null, _triggers.Get(src)));
+                var tr = _triggers.Get(src);
+                if (tr.TargetEntity >= 0 && oldToNew.TryGetValue(tr.TargetEntity, out Entity newTarget))
+                {
+                    tr.TargetEntity = newTarget.Index;
+                }
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<TriggerComponent>(_triggers, dest.Index, null, tr));
             }
 
             // Zkopirujeme ActionComponent
             if (_actions.Has(src))
             {
                 cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<ActionComponent>(_actions, dest.Index, null, _actions.Get(src)));
+            }
+
+            // Zkopirujeme BehaviorGraphComponent
+            if (_graphs.Has(src))
+            {
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<BehaviorGraphComponent>(_graphs, dest.Index, null, _graphs.Get(src)));
+            }
+
+            // Zkopirujeme PrefabLink
+            if (_prefabLinks.Has(src))
+            {
+                cmd.Add(new MiniEngine.Editor.History.ComponentChangeCommand<PrefabLink>(_prefabLinks, dest.Index, null, _prefabLinks.Get(src)));
             }
 
             // Zkopirujeme Name

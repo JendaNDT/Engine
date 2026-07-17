@@ -51,14 +51,17 @@ public sealed class LightPanel
 
         bool changed = false;
 
-        bool dirChanged = false;
-        dirChanged |= ImGui.SliderFloat("Otoceni", ref _azimuthDeg, 0f, 360f, "%.0f st");
-        dirChanged |= ImGui.SliderFloat("Vyska slunce", ref _elevationDeg, 5f, 90f, "%.0f st");
-        if (dirChanged)
+        if (ImGui.SliderFloat("Otoceni", ref _azimuthDeg, 0f, 360f, "%.0f st"))
         {
             UpdateDirection();
-            if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
         }
+        if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
+
+        if (ImGui.SliderFloat("Vyska slunce", ref _elevationDeg, 5f, 90f, "%.0f st"))
+        {
+            UpdateDirection();
+        }
+        if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;
 
         ImGui.SliderFloat("Sila slunce", ref _lighting.SunIntensity, 0f, 2f, "%.2f");
         if (ImGui.IsItemDeactivatedAfterEdit()) changed = true;

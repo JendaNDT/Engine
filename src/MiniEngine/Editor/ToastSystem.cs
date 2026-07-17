@@ -6,12 +6,15 @@ namespace MiniEngine.Editor;
 
 public sealed class ToastNotification
 {
+    private static int _idCounter;
+    public int UniqueId { get; }
     public string Message { get; }
     public float Duration { get; }
     public float Age { get; set; }
 
     public ToastNotification(string message, float duration = 3.0f)
     {
+        UniqueId = System.Threading.Interlocked.Increment(ref _idCounter);
         Message = message;
         Duration = duration;
         Age = 0f;
@@ -64,7 +67,7 @@ public static class ToastSystem
                 ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 4f);
                 ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1f);
 
-                string title = $"##Toast{i}";
+                string title = $"##Toast{toast.UniqueId}";
                 ImGui.Begin(title, ImGuiWindowFlags.NoDecoration | 
                                    ImGuiWindowFlags.AlwaysAutoResize | 
                                    ImGuiWindowFlags.NoSavedSettings | 

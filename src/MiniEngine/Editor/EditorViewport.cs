@@ -222,6 +222,13 @@ public sealed class EditorViewport : IDisposable
     {
         var io = ImGui.GetIO();
 
+        // Pokud okno ztratilo fokus, nuceně uvolníme kurzor a zrušíme zachycení.
+        if (Captured && !Raylib.IsWindowFocused())
+        {
+            Captured = false;
+            Raylib.EnableCursor();
+        }
+
         if (!Captured && Hovered && Raylib.IsMouseButtonPressed(MouseButton.Right))
         {
             Captured = true;
