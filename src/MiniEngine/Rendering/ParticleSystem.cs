@@ -52,7 +52,7 @@ public sealed class ParticleSystem
         for (int i = 0; i < emitterSpan.Length; i++)
         {
             ref var emitter = ref emitterSpan[i];
-            if (!emitter.Active) continue;
+            if (!emitter.Active || emitter.SpawnRate <= 0f) continue;
 
             ref var t = ref transforms.Get(entities[i]);
             Vector3 spawnPos = t.World.Translation;

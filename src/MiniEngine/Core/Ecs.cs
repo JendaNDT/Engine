@@ -66,12 +66,15 @@ public sealed class Store<T> : IStore where T : struct
         return ref _dense[_count - 1];
     }
 
+    public Action<int, T>? OnRemoved;
+
     /// <summary>Swap-remove: posledni prvek se presune na uvolnene misto. O(1), ale meni poradi.</summary>
     public void RemoveAt(int entityIndex)
     {
         if (!Has(entityIndex)) return;
 
         int slot = _sparse[entityIndex];
+        T val = _dense[slot];
         int last = _count - 1;
 
         _dense[slot] = _dense[last];
@@ -80,6 +83,8 @@ public sealed class Store<T> : IStore where T : struct
         _sparse[_entities[slot]] = slot;
         _sparse[entityIndex] = -1;
         _count--;
+
+        OnRemoved?.Invoke(entityIndex, val);
     }
 
     /// <summary>Odstrani vsechny komponenty (entity zustavaji zive).</summary>

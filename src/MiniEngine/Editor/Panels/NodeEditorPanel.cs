@@ -83,7 +83,7 @@ namespace MiniEngine.Editor
                 {
                     try
                     {
-                        _currentGraph = System.Text.Json.JsonSerializer.Deserialize<BehaviorGraph>(comp.GraphJson);
+                        _currentGraph = System.Text.Json.JsonSerializer.Deserialize(comp.GraphJson, MiniEngine.Engine.SceneJsonContext.Default.BehaviorGraph);
                     }
                     catch
                     {
@@ -373,7 +373,7 @@ namespace MiniEngine.Editor
         {
             try
             {
-                comp.GraphJson = System.Text.Json.JsonSerializer.Serialize(_currentGraph);
+                comp.GraphJson = System.Text.Json.JsonSerializer.Serialize(_currentGraph, MiniEngine.Engine.SceneJsonContext.Default.BehaviorGraph);
             }
             catch {}
         }

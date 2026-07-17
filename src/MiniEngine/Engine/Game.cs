@@ -108,6 +108,12 @@ public sealed class Game : IDisposable
         _renderers = _world.Store<MeshRenderer>();
         _names = _world.Store<Name>();
         _bodies = _world.Store<RigidBodyRef>();
+        _bodies.OnRemoved = (idx, r) => {
+            if (_physics != null)
+            {
+                _physics.Untrack(new BepuPhysics.BodyHandle(r.BodyHandle));
+            }
+        };
         _emitters = _world.Store<ParticleEmitter>();
         _audioSources = _world.Store<AudioSourceComponent>();
         _behaviors = _world.Store<BehaviorComponent>();
@@ -536,6 +542,7 @@ public sealed class Game : IDisposable
         {
             _assetScanTimer = 0f;
             RefreshAssetFiles();
+            _assets.CollectUnusedAssets(_renderers.Span, _emitters.Span, _audioSources.Span);
         }
 
         bool altDown = Raylib.IsKeyDown(KeyboardKey.LeftAlt) || Raylib.IsKeyDown(KeyboardKey.RightAlt);
@@ -765,7 +772,7 @@ public sealed class Game : IDisposable
             {
                 try
                 {
-                    var g = System.Text.Json.JsonSerializer.Deserialize<BehaviorGraph>(comp.GraphJson);
+                    var g = System.Text.Json.JsonSerializer.Deserialize(comp.GraphJson, SceneJsonContext.Default.BehaviorGraph);
                     if (g != null)
                     {
                         int ent = graphEntities[i];
@@ -1822,7 +1829,7 @@ public sealed class Game : IDisposable
                 {
                     try
                     {
-                        overrides = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>>(pl.Overrides);
+                        overrides = System.Text.Json.JsonSerializer.Deserialize(pl.Overrides, SceneJsonContext.Default.DictionaryStringListString);
                     }
                     catch { }
                 }
@@ -1919,7 +1926,7 @@ public sealed class Game : IDisposable
                     overrides.Remove(key);
                 }
 
-                pl.Overrides = overrides.Count > 0 ? System.Text.Json.JsonSerializer.Serialize(overrides) : "";
+                pl.Overrides = overrides.Count > 0 ? System.Text.Json.JsonSerializer.Serialize(overrides, SceneJsonContext.Default.DictionaryStringListString) : "";
                 _prefabLinks.Get(rootIdx) = pl;
             }
             catch (Exception ex)

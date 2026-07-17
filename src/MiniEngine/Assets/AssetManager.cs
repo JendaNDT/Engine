@@ -1,4 +1,8 @@
+using System;
+using System.IO;
+using System.Collections.Generic;
 using Raylib_cs;
+using MiniEngine.Core;
 
 namespace MiniEngine.Assets;
 
@@ -165,7 +169,7 @@ public sealed class AssetManager : IDisposable
         return anims;
     }
 
-    private readonly List<Sound> _soundAliases = [];
+    private readonly Dictionary<string, List<Sound>> _aliasesByPath = [];
 
     public void UpdateHotReload()
     {
@@ -221,11 +225,14 @@ public sealed class AssetManager : IDisposable
         }
         _textures.Clear();
 
-        foreach (var alias in _soundAliases)
+        foreach (var list in _aliasesByPath.Values)
         {
-            Raylib.UnloadSound(alias);
+            foreach (var alias in list)
+            {
+                Raylib.UnloadSound(alias);
+            }
         }
-        _soundAliases.Clear();
+        _aliasesByPath.Clear();
 
         foreach (var sound in _sounds.Values)
         {
@@ -263,13 +270,15 @@ public sealed class AssetManager : IDisposable
             if (!File.Exists(fullPath)) return default;
         }
 
-        if (_textures.TryGetValue(fullPath, out var tex))
+        string key = Path.GetFullPath(fullPath);
+
+        if (_textures.TryGetValue(key, out var tex))
         {
             return tex;
         }
 
-        var newTex = Raylib.LoadTexture(fullPath);
-        _textures[fullPath] = newTex;
+        var newTex = Raylib.LoadTexture(key);
+        _textures[key] = newTex;
         return newTex;
     }
 
@@ -284,15 +293,89 @@ public sealed class AssetManager : IDisposable
             if (!File.Exists(fullPath)) return default;
         }
 
-        if (!_sounds.TryGetValue(fullPath, out var originalSound))
+        string key = Path.GetFullPath(fullPath);
+
+        if (!_sounds.TryGetValue(key, out var originalSound))
         {
-            originalSound = Raylib.LoadSound(fullPath);
-            _sounds[fullPath] = originalSound;
+            originalSound = Raylib.LoadSound(key);
+            _sounds[key] = originalSound;
         }
 
         // Vytvořit samostatný alias zvuku pro nezávislé ovládání
         var alias = Raylib.LoadSoundAlias(originalSound);
-        _soundAliases.Add(alias);
+        if (!_aliasesByPath.TryGetValue(key, out var list))
+        {
+            list = [];
+            _aliasesByPath[key] = list;
+        }
+        list.Add(alias);
         return alias;
+    }
+
+    public void CollectUnusedAssets(
+        ReadOnlySpan<MeshRenderer> renderers,
+        ReadOnlySpan<ParticleEmitter> emitters,
+        ReadOnlySpan<AudioSourceComponent> audioSources)
+    {
+        var referencedTex = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var referencedSounds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 1. Získat všechny odkazované textury
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            var r = renderers[i];
+            if (!string.IsNullOrEmpty(r.AlbedoTexturePath))
+                referencedTex.Add(Path.GetFullPath(Path.Combine(AssetsRoot, r.AlbedoTexturePath)));
+            if (!string.IsNullOrEmpty(r.NormalMapPath))
+                referencedTex.Add(Path.GetFullPath(Path.Combine(AssetsRoot, r.NormalMapPath)));
+            if (!string.IsNullOrEmpty(r.MetallicRoughnessMapPath))
+                referencedTex.Add(Path.GetFullPath(Path.Combine(AssetsRoot, r.MetallicRoughnessMapPath)));
+        }
+
+        for (int i = 0; i < emitters.Length; i++)
+        {
+            var e = emitters[i];
+            if (!string.IsNullOrEmpty(e.TexturePath))
+                referencedTex.Add(Path.GetFullPath(Path.Combine(AssetsRoot, e.TexturePath)));
+        }
+
+        // 2. Získat všechny odkazované zvuky
+        for (int i = 0; i < audioSources.Length; i++)
+        {
+            var s = audioSources[i];
+            if (!string.IsNullOrEmpty(s.ClipPath))
+                referencedSounds.Add(Path.GetFullPath(Path.Combine(AssetsRoot, s.ClipPath)));
+        }
+
+        // 3. Uvolnit nepoužívané textury
+        var texKeys = new List<string>(_textures.Keys);
+        foreach (var key in texKeys)
+        {
+            if (!referencedTex.Contains(key))
+            {
+                Raylib.UnloadTexture(_textures[key]);
+                _textures.Remove(key);
+            }
+        }
+
+        // 4. Uvolnit nepoužívané zvuky a jejich aliasy
+        var soundKeys = new List<string>(_sounds.Keys);
+        foreach (var key in soundKeys)
+        {
+            if (!referencedSounds.Contains(key))
+            {
+                if (_aliasesByPath.TryGetValue(key, out var aliases))
+                {
+                    foreach (var alias in aliases)
+                    {
+                        Raylib.UnloadSound(alias);
+                    }
+                    _aliasesByPath.Remove(key);
+                }
+
+                Raylib.UnloadSound(_sounds[key]);
+                _sounds.Remove(key);
+            }
+        }
     }
 }

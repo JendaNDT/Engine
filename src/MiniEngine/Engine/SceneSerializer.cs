@@ -151,6 +151,8 @@ public sealed class LightData
 [JsonSerializable(typeof(PostProcessingSettingsData))]
 [JsonSerializable(typeof(LightData))]
 [JsonSerializable(typeof(BehaviorGraphData))]
+[JsonSerializable(typeof(System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>))]
+[JsonSerializable(typeof(BehaviorGraph))]
 internal partial class SceneJsonContext : JsonSerializerContext { }
 
 public static class SceneSerializer
@@ -923,7 +925,7 @@ public static class SceneSerializer
                 {
                     try
                     {
-                        overrides = JsonSerializer.Deserialize<Dictionary<string, List<string>>>(pl.Overrides);
+                        overrides = JsonSerializer.Deserialize(pl.Overrides, SceneJsonContext.Default.DictionaryStringListString);
                     }
                     catch { }
                 }

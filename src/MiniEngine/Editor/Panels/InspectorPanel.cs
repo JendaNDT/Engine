@@ -187,7 +187,7 @@ public sealed class InspectorPanel
                 {
                     try
                     {
-                        var deserialized = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>>(pl.Overrides);
+                        var deserialized = System.Text.Json.JsonSerializer.Deserialize(pl.Overrides, MiniEngine.Engine.SceneJsonContext.Default.DictionaryStringListString);
                         if (deserialized != null)
                         {
                             overrides = deserialized;
